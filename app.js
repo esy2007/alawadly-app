@@ -18,6 +18,7 @@ function Icon({ name, size = 18, className = "", style = {} }) {
 // inside the Capacitor/APK webview) ----------
 const FIREBASE_PROJECT_ID = "alawadly-53e7d";
 const FIREBASE_API_KEY = "AIzaSyAp8Hbi1AmSovP3lxZ6PkMI2C2KgYdSEEo";
+const DEV_RESET_PASSWORD = "awadly-reset-2026";
 const FIRESTORE_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 
 let authState = { idToken: null, refreshToken: null, expiresAt: 0 };
@@ -200,6 +201,7 @@ const changesStore = makeCollectionStore("changes_col");
 const ordersStore = makeCollectionStore("orders_col");
 const categoriesStore = makeCollectionStore("categories_col");
 const transfersStore = makeCollectionStore("transfers_col");
+const stockAlertsStore = makeCollectionStore("stock_alerts_col");
 
 // Fetches only the specific image documents needed (by product id) in one request,
 // instead of loading every product's image up front. This is what keeps opening the
@@ -208,9 +210,9 @@ async function batchGetImages(ids) {
   if (!ids.length) return {};
   try {
     const token = await ensureAuth();
-    const base = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`;
-    const documents = ids.map((id) => `${base}/product_images_col/${id}`);
-    const res = await fetch(`${base}:batchGet`, {
+    const resourceBase = `projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`;
+    const documents = ids.map((id) => `${resourceBase}/product_images_col/${id}`);
+    const res = await fetch(`https://firestore.googleapis.com/v1/${resourceBase}:batchGet`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ documents }),
@@ -376,7 +378,7 @@ const DEFAULT_ADMIN = {
   password: "admin123",
   role: "admin",
   status: "approved",
-  permissions: { manageProducts: true, editPrices: true },
+  permissions: { manageProducts: true, deleteProducts: true, editPrices: true },
 };
 
 // ---------- Small UI atoms ----------
@@ -587,14 +589,34 @@ function ProfileModal({ user, users, setUsers, onClose, onUpdated }) {
 }
 
 // ---------- Main menu ----------
-function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile }) {
+function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile, onDevReset }) {
   const items = [
     { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: true, accent: "#10B981" },
     { key: "orders", label: "الطلبات", desc: "تسجيل أوردرات جديدة", icon: "Package", enabled: true, accent: "#F59E0B" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
     { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: user.role === "admin", accent: "#0EA5E9" },
     { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: user.role === "admin", accent: "#F43F5E" },
-  ].filter((i) => (i.key !== "admin" && i.key !== "reports") || user.role === "admin");
+    { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: user.role === "admin", accent: "#F59E0B" },
+  ].filter((i) => (i.key !== "admin" && i.key !== "reports" && i.key !== "stock-alerts") || user.role === "admin");
+
+  // Hidden developer entry point: admin taps the version label 3 times within
+  // ~1.2s to reach the password-gated full data reset (used for clearing test data).
+  const [tapCount, setTapCount] = useState(0);
+  const tapTimerRef = React.useRef(null);
+  const [showDevReset, setShowDevReset] = useState(false);
+
+  const handleVersionTap = () => {
+    setTapCount((c) => {
+      const next = c + 1;
+      if (next >= 3) {
+        setShowDevReset(true);
+        return 0;
+      }
+      return next;
+    });
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(() => setTapCount(0), 1200);
+  };
 
   return (
     <div className="shop-root">
@@ -602,8 +624,8 @@ function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile }) {
 
       <div className="max-w-md mx-auto px-4 py-4 grid grid-cols-2 gap-3 fade-up">
         {items.map((it) => {
-          const dotRed = it.key === "orders" && hasNew.ordersPending;
-          const dotGreen = it.key !== "orders" && hasNew[it.key];
+          const dotRed = (it.key === "orders" && hasNew.ordersPending) || (it.key === "stock-alerts" && hasNew["stock-alerts"]);
+          const dotGreen = it.key !== "orders" && it.key !== "stock-alerts" && hasNew[it.key];
           return (
             <button
               key={it.key}
@@ -626,7 +648,84 @@ function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile }) {
           );
         })}
       </div>
+
+      {user.role === "admin" && (
+        <p onClick={handleVersionTap} className="text-center text-[10px] text-[#4B4F58] py-4 select-none cursor-default">
+          الإصدار ١.٠
+        </p>
+      )}
+
+      {showDevReset && <DevResetModal onClose={() => setShowDevReset(false)} onConfirmed={onDevReset} />}
     </div>
+  );
+}
+
+function DevResetModal({ onClose, onConfirmed }) {
+  const [stage, setStage] = useState("password");
+  const [password, setPassword] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const checkPassword = () => {
+    if (password !== DEV_RESET_PASSWORD) {
+      setError("كلمة السر غلط");
+      return;
+    }
+    setError("");
+    setStage("confirm");
+  };
+
+  const doReset = async () => {
+    if (confirmText.trim() !== "تصفير") {
+      setError('اكتب "تصفير" بالظبط للتأكيد');
+      return;
+    }
+    setError("");
+    setBusy(true);
+    await onConfirmed();
+    setBusy(false);
+    setDone(true);
+  };
+
+  return (
+    <Modal title={done ? "تم" : stage === "password" ? "دخول المطور" : "تأكيد التصفير"} accent="#F43F5E" onClose={onClose}>
+      {done ? (
+        <>
+          <p className="text-sm text-emerald-300 mb-4 leading-6">تم مسح كل البيانات بنجاح. حسابات المستخدمين فضلت زي ما هي.</p>
+          <button onClick={onClose} className="btn-sky w-full rounded-xl py-2.5 font-bold">تمام</button>
+        </>
+      ) : stage === "password" ? (
+        <>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="كلمة سر المطور"
+            className="field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
+          />
+          {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+          <button onClick={checkPassword} className="btn-sky w-full rounded-xl py-2.5 font-bold">دخول</button>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-rose-300 mb-3 leading-6">
+            الخطوة دي هتمسح كل المنتجات والأوردرات والتحويلات والتصنيفات نهائيًا ومفيش رجوع فيها. حسابات المستخدمين (الأدمن والموظفين) هتفضل زي ما هي.
+          </p>
+          <p className="text-xs text-[#9A9EA6] mb-1.5">اكتب "تصفير" للتأكيد</p>
+          <input
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            className="field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
+          />
+          {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+          <button disabled={busy} onClick={doReset} className="btn-rose w-full rounded-xl py-2.5 font-bold">
+            {busy ? "بيتصفر..." : "تصفير كل البيانات نهائيًا"}
+          </button>
+        </>
+      )}
+    </Modal>
   );
 }
 
@@ -818,6 +917,7 @@ function makeEmptyNewProduct() {
 function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, setView }) {
   const canEditPrices = user.role === "admin" || !!user.permissions?.editPrices;
   const canManageProducts = user.role === "admin" || !!user.permissions?.manageProducts;
+  const canDeleteProducts = user.role === "admin" || !!user.permissions?.deleteProducts;
   const isAdmin = user.role === "admin";
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState({});
@@ -831,6 +931,9 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   const [toast, setToast] = useState("");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showManualReset, setShowManualReset] = useState(false);
+  const [outOfStockProduct, setOutOfStockProduct] = useState(null);
+  const [showMissingProduct, setShowMissingProduct] = useState(false);
+  const [missingProductName, setMissingProductName] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const PAGE_SIZE = 30;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -878,6 +981,40 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   const showToast = (text) => {
     setToast(text);
     setTimeout(() => setToast(""), 2500);
+  };
+
+  const reportOutOfStock = (product, branch) => {
+    const alert = {
+      id: uid(),
+      type: "outOfStock",
+      productId: product.id,
+      productName: product.name,
+      branch,
+      reportedBy: user.name,
+      reportedAt: Date.now(),
+      resolved: false,
+    };
+    stockAlertsStore.upsert(alert);
+    setOutOfStockProduct(null);
+    showToast("تم إبلاغ الأدمن إن المنتج خلص");
+  };
+
+  const submitMissingProduct = () => {
+    if (!missingProductName.trim()) return;
+    const alert = {
+      id: uid(),
+      type: "missingProduct",
+      productId: null,
+      productName: missingProductName.trim(),
+      branch: null,
+      reportedBy: user.name,
+      reportedAt: Date.now(),
+      resolved: false,
+    };
+    stockAlertsStore.upsert(alert);
+    setMissingProductName("");
+    setShowMissingProduct(false);
+    showToast("تم إبلاغ الأدمن بالمنتج المطلوب");
   };
 
   const handleRefresh = async () => {
@@ -1126,6 +1263,9 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
           </div>
         )}
 
+        <button onClick={() => setShowMissingProduct(true)} className="w-full text-xs text-purple-300 font-semibold bg-purple-500/10 border border-purple-500/20 rounded-xl py-2 mb-3 flex items-center justify-center gap-1.5">
+          <Icon name="Tag" size={13} /> عايز تبلّغ عن منتج مش موجود في القايمة؟
+        </button>
 
         <div className="space-y-3 pb-4">
           {productsLoading && products.length === 0 && (
@@ -1191,7 +1331,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
                 {editing && editError && <p className="text-xs text-rose-400 mt-2 flex items-center gap-1"><Icon name="AlertCircle" size={12} /> {editError}</p>}
 
-                {(canEditPrices || canManageProducts) && (
+                {(canEditPrices || canManageProducts || canDeleteProducts) && (
                   <div className="flex gap-2 justify-end mt-3 pt-2 border-t border-white/5">
                     {editing ? (
                       <>
@@ -1203,11 +1343,19 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
                         {canEditPrices && (
                           <button onClick={() => startEdit(p)} className="text-xs bg-amber-600/20 text-amber-400 px-3 py-1 rounded-lg font-semibold hover:bg-amber-600 hover:text-white transition-all flex items-center gap-1"><Icon name="Pencil" size={13} /> تعديل</button>
                         )}
-                        {canManageProducts && (
+                        {canDeleteProducts && (
                           <button onClick={() => removeProduct(p.id)} className="text-xs bg-rose-600/20 text-rose-400 px-2 py-1 rounded-lg font-semibold hover:bg-rose-600 hover:text-white transition-all flex items-center gap-1"><Icon name="Trash2" size={13} /> حذف</button>
                         )}
                       </>
                     )}
+                  </div>
+                )}
+
+                {!editing && (
+                  <div className="flex justify-end mt-2">
+                    <button onClick={() => setOutOfStockProduct(p)} className="text-xs bg-amber-600/10 text-amber-400 px-2.5 py-1 rounded-lg font-semibold hover:bg-amber-600 hover:text-white transition-all flex items-center gap-1">
+                      <Icon name="AlertCircle" size={12} /> المنتج خلص
+                    </button>
                   </div>
                 )}
               </div>
@@ -1277,6 +1425,34 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
               <button onClick={() => finalizeAddProduct(duplicateMatch.id)} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">استبدال البيانات</button>
               <button onClick={() => setDuplicateMatch(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
             </div>
+          </Modal>
+        )}
+
+        {outOfStockProduct && (
+          <Modal title="المنتج خلص فين؟" accent="#F59E0B" onClose={() => setOutOfStockProduct(null)}>
+            <p className="text-sm text-[#D4D4D8] mb-4">
+              <span className="font-bold text-white">{outOfStockProduct.name}</span> — اختار الفرع اللي المنتج خلص فيه، هيتبعت للأدمن على طول.
+            </p>
+            <div className="flex gap-2">
+              {DISPATCH_LOCATIONS.map((loc) => (
+                <button key={loc} onClick={() => reportOutOfStock(outOfStockProduct, loc)} className="btn-sky flex-1 rounded-xl py-2.5 text-sm font-bold">
+                  {loc}
+                </button>
+              ))}
+            </div>
+          </Modal>
+        )}
+
+        {showMissingProduct && (
+          <Modal title="منتج مش موجود في القايمة" accent="#A855F7" onClose={() => { setShowMissingProduct(false); setMissingProductName(""); }}>
+            <p className="text-sm text-[#D4D4D8] mb-3">اكتب اسم أو وصف المنتج اللي الزبون سأل عنه، هيتبعت للأدمن.</p>
+            <input
+              value={missingProductName}
+              onChange={(e) => setMissingProductName(e.target.value)}
+              placeholder="اسم المنتج المطلوب"
+              className="field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
+            />
+            <button onClick={submitMissingProduct} className="btn-sky w-full rounded-xl py-2.5 font-bold">إرسال للأدمن</button>
           </Modal>
         )}
 
@@ -1380,6 +1556,11 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
   const repNameOptions = [...new Set(orders.map((o) => o.repName).filter(Boolean))];
   const areaOptions = [...new Set(orders.map((o) => o.area).filter(Boolean))];
 
+  // Paid orders drop off this screen 24 hours after payment was confirmed — they're
+  // still permanently available to the admin in Reports regardless of age.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const visibleOrders = orders.filter((o) => !(o.paid && o.confirmedAt && Date.now() - o.confirmedAt > DAY_MS));
+
   const pickInvoiceImage = async (file) => {
     try {
       const dataUrl = await resizeImageFile(file, 1400, 0.88);
@@ -1460,8 +1641,8 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
         </button>
 
         <div className="space-y-3 pb-6">
-          {orders.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لا يوجد أوردرات مسجلة بعد</p>}
-          {orders.map((o) => {
+          {visibleOrders.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لا يوجد أوردرات مسجلة بعد</p>}
+          {visibleOrders.map((o) => {
             const pay = paymentLabel(o);
             return (
               <div key={o.id} className="panel p-4 rounded-2xl">
@@ -1826,6 +2007,69 @@ function ReportsScreen({ user, orders, setView }) {
   );
 }
 
+// ---------- Stock alerts screen (admin) ----------
+function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
+  const unresolved = stockAlerts.filter((a) => !a.resolved).sort((a, b) => b.reportedAt - a.reportedAt);
+  const resolved = stockAlerts.filter((a) => a.resolved).sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0));
+  const [showResolved, setShowResolved] = useState(false);
+
+  const resolve = (alert) => {
+    const updated = { ...alert, resolved: true, resolvedAt: Date.now() };
+    setStockAlerts(stockAlerts.map((a) => (a.id === alert.id ? updated : a)));
+    stockAlertsStore.upsert(updated);
+  };
+
+  const AlertCard = ({ a }) => (
+    <div className="panel p-4 rounded-2xl">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div>
+          <span
+            className="text-xs font-bold px-2 py-0.5 rounded-full inline-block mb-1.5"
+            style={{ background: a.type === "outOfStock" ? "#F59E0B22" : "#A855F722", color: a.type === "outOfStock" ? "#F59E0B" : "#C084FC" }}
+          >
+            {a.type === "outOfStock" ? "منتج خلص" : "طلب منتج غير موجود"}
+          </span>
+          <h3 className="font-bold text-sm text-white">{a.productName}</h3>
+          {a.branch && <p className="text-xs text-[#9A9EA6] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> فرع {a.branch}</p>}
+        </div>
+        {!a.resolved && (
+          <button onClick={() => resolve(a)} className="text-xs btn-emerald px-3 py-1.5 rounded-lg font-semibold shrink-0 flex items-center gap-1">
+            <Icon name="CheckCircle2" size={13} /> تم الحل
+          </button>
+        )}
+      </div>
+      <p className="text-xs font-bold text-amber-300">
+        {a.reportedBy} <span className="text-[#7C818C] font-normal">· {new Date(a.reportedAt).toLocaleString("ar-EG")}</span>
+      </p>
+    </div>
+  );
+
+  return (
+    <div className="shop-root">
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="تنبيهات المخزون" />
+      <div className="max-w-lg mx-auto px-4 py-2 fade-up">
+        <div className="space-y-3 pb-4">
+          {unresolved.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">مفيش تنبيهات جديدة</p>}
+          {unresolved.map((a) => <AlertCard key={a.id} a={a} />)}
+        </div>
+
+        {resolved.length > 0 && (
+          <>
+            <button onClick={() => setShowResolved((v) => !v)} className="text-xs text-sky-400 font-semibold mb-3 hover:underline">
+              {showResolved ? "إخفاء المُتم حلها" : `عرض المُتم حلها (${resolved.length})`}
+            </button>
+            {showResolved && (
+              <div className="space-y-3 pb-6 opacity-60">
+                {resolved.map((a) => <AlertCard key={a.id} a={a} />)}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------- Admin screen ----------
 function AdminScreen({ user, users, setUsers, setView }) {
   const pending = users.filter((u) => u.status === "pending");
@@ -1882,268 +2126,4 @@ function AdminScreen({ user, users, setUsers, setView }) {
               <div key={u.id} className="panel rounded-2xl p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="font-bold text-sm flex items-center gap-2 text-white">{u.name} <StatusStamp status={u.status} /></div>
-                  <button onClick={() => removeUser(u.id)} className="text-rose-400 hover:text-rose-300"><Icon name="Trash2" size={16} /></button>
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
-                    <input type="checkbox" checked={!!u.permissions?.manageProducts} onChange={() => togglePermission(u, "manageProducts")} />
-                    صلاحية إضافة وحذف المنتجات
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
-                    <input type="checkbox" checked={!!u.permissions?.editPrices} onChange={() => togglePermission(u, "editPrices")} />
-                    صلاحية تعديل الأسعار
-                  </label>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Root App ----------
-function App() {
-  const [booting, setBooting] = useState(true);
-  const [users, setUsers] = useState([DEFAULT_ADMIN]);
-  const [products, setProducts] = useState([]);
-  const [changedToday, setChangedToday] = useState([]);
-  const [orders, setOrders] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [transfers, setTransfers] = useState([]);
-  const [screen, setScreen] = useState("login");
-  const [currentUser, setCurrentUser] = useState(null);
-  const [pendingStatus, setPendingStatus] = useState("pending");
-  const [authError, setAuthError] = useState("");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [lastSeen, setLastSeen] = useState({ prices: 0, reports: 0 });
-  const [reminder, setReminder] = useState(null);
-  const [showProfile, setShowProfile] = useState(false);
-  const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
-  const remindedDateRef = React.useRef(null);
-  const [syncError, setSyncError] = useState(null);
-
-  useEffect(() => {
-    const handler = (e) => {
-      setSyncError(e.detail);
-      setTimeout(() => setSyncError(null), 10000);
-    };
-    window.addEventListener("store-error", handler);
-    return () => window.removeEventListener("store-error", handler);
-  }, []);
-
-  const requestNotifPermission = async () => {
-    if (typeof Notification === "undefined") return;
-    try {
-      const perm = await Notification.requestPermission();
-      setNotifPermission(perm);
-    } catch {
-      // some embedded webviews reject this silently
-    }
-  };
-
-  useEffect(() => {
-    (async () => {
-      const storedUsers = await usersStore.loadAll();
-      let u = storedUsers || [];
-      if (!u.some((x) => x.role === "admin")) {
-        u = [...u, DEFAULT_ADMIN];
-        usersStore.upsert(DEFAULT_ADMIN);
-      }
-      setUsers(u);
-
-      // Products carry each item's photo and can get large as the catalog grows,
-      // so they're NOT fetched here — only when the Prices screen is opened (see nav()).
-      setChangedToday((await changesStore.loadAll()) || []);
-      setOrders((await ordersStore.loadAll()) || []);
-      setCategories((await categoriesStore.loadAll()) || []);
-      setTransfers((await transfersStore.loadAll()) || []);
-
-      // Restore session — works once this is a real web page or the APK.
-      // Claude's artifact preview sandbox blocks localStorage, so this won't
-      // auto-login while testing here, but will once deployed for real.
-      const sessionId = loadSessionUserId();
-      if (sessionId) {
-        const found = u.find((x) => x.id === sessionId && x.status === "approved");
-        if (found) {
-          setCurrentUser(found);
-          setLastSeen({ prices: Date.now(), reports: Date.now() });
-          setScreen("menu");
-        }
-      }
-
-      setBooting(false);
-    })();
-  }, []);
-
-
-  useEffect(() => {
-    const check = () => {
-      if (!currentUser) return;
-      const now = new Date();
-      const todayKey = now.toDateString();
-      const pastCutoff = now.getHours() > 11 || (now.getHours() === 11 && now.getMinutes() >= 30);
-      if (!pastCutoff || remindedDateRef.current === todayKey) return;
-      const mine = orders.filter((o) => !o.paid && o.employeeName === currentUser.name);
-      if (mine.length > 0) {
-        setReminder(mine);
-        remindedDateRef.current = todayKey;
-        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-          try { new Notification("العوادلي", { body: `عندك ${mine.length} أوردر لسه مدفوعش` }); } catch {}
-        }
-      }
-    };
-    check();
-    const interval = setInterval(check, 60000);
-    return () => clearInterval(interval);
-  }, [currentUser, orders]);
-
-  const handleLogin = (name, password) => {
-    setAuthError("");
-    if (!name || !password) {
-      setAuthError("من فضلك اكتب الاسم وكلمة المرور");
-      return;
-    }
-    setAuthLoading(true);
-    const found = users.find((u) => namesMatch(u.name, name));
-    setAuthLoading(false);
-    if (!found || found.password !== password) {
-      setAuthError("الاسم أو كلمة المرور غلط");
-      return;
-    }
-    if (found.status !== "approved") {
-      setPendingStatus(found.status);
-      setScreen("pending");
-      return;
-    }
-    setCurrentUser(found);
-    saveSession(found);
-    setLastSeen({ prices: Date.now(), reports: Date.now() });
-    setScreen("menu");
-  };
-
-  const handleRegister = (name, password, confirm) => {
-    setAuthError("");
-    if (!name || !password) {
-      setAuthError("من فضلك املأ كل الحقول");
-      return;
-    }
-    if (password !== confirm) {
-      setAuthError("كلمة المرور غير متطابقة");
-      return;
-    }
-    if (users.some((u) => namesMatch(u.name, name))) {
-      setAuthError("الاسم ده مستخدم قبل كده");
-      return;
-    }
-    setAuthLoading(true);
-    const newUser = { id: uid(), name, password, role: "employee", status: "pending", permissions: { manageProducts: false, editPrices: false } };
-    setUsers([...users, newUser]);
-    usersStore.upsert(newUser);
-    setAuthLoading(false);
-    setPendingStatus("pending");
-    setScreen("pending");
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setAuthError("");
-    clearSession();
-    setScreen("login");
-  };
-
-  const [productsLoaded, setProductsLoaded] = useState(false);
-  const [productsLoading, setProductsLoading] = useState(false);
-
-  const ensureProductsLoaded = async () => {
-    if (productsLoaded) return;
-    setProductsLoading(true);
-    const data = await productsStore.loadAll();
-    setProducts(data || []);
-    setProductsLoaded(true);
-    setProductsLoading(false);
-  };
-
-  const nav = (v) => {
-    if (v === "logout") {
-      handleLogout();
-      return;
-    }
-    if (v === "prices" || v === "reports") setLastSeen((prev) => ({ ...prev, [v]: Date.now() }));
-    if (v === "prices") ensureProductsLoaded();
-    setScreen(v);
-  };
-
-  const hasNew = {
-    prices: products.some((p) => (p.updatedAt || p.createdAt || 0) > lastSeen.prices),
-    reports: orders.some((o) => o.paid && (o.confirmedAt || o.createdAt) > lastSeen.reports),
-    ordersPending: orders.some((o) => !o.paid),
-  };
-
-  if (booting) {
-    return (
-      <div className="shop-root flex items-center justify-center">
-        <Icon name="Loader2" className="animate-spin text-sky-400" size={28} />
-      </div>
-    );
-  }
-
-  return (
-    <div className="shop-root">
-      {syncError && (
-        <div className="fixed bottom-3 inset-x-3 z-[70] bg-rose-950/90 border border-rose-800 rounded-2xl p-3 modal-pop max-w-md mx-auto text-center">
-          <p className="text-rose-300 text-xs font-bold flex items-center justify-center gap-1.5">
-            <Icon name="AlertCircle" size={14} /> تعذر الاتصال بقاعدة البيانات — {syncError.collectionName}
-          </p>
-          {syncError.detail && <p className="text-rose-400/80 text-[10px] mt-1 break-words">{syncError.detail}</p>}
-        </div>
-      )}
-      {reminder && currentUser && (
-        <div className="fixed top-3 inset-x-3 z-[60] panel rounded-2xl p-4 modal-pop max-w-md mx-auto">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="font-bold text-amber-400 text-sm flex items-center gap-1.5"><Icon name="AlertCircle" size={14} /> عندك {reminder.length} أوردر لسه مدفوعش</p>
-              <p className="text-xs text-[#9A9EA6] mt-1">افتح "الطلبات" وأكد الدفع لما تستلم الفلوس.</p>
-              <button onClick={() => { setReminder(null); nav("orders"); }} className="text-xs text-sky-400 font-semibold mt-2 hover:underline">روح للطلبات دلوقتي</button>
-            </div>
-            <button onClick={() => setReminder(null)} className="text-[#9A9EA6] hover:text-white shrink-0"><Icon name="X" size={16} /></button>
-          </div>
-        </div>
-      )}
-      {showProfile && currentUser && (
-        <ProfileModal user={currentUser} users={users} setUsers={setUsers} onClose={() => setShowProfile(false)} onUpdated={(updated) => setCurrentUser(updated)} />
-      )}
-      {screen === "login" && (
-        <LoginScreen onLogin={handleLogin} goRegister={() => { setAuthError(""); setScreen("register"); }} error={authError} loading={authLoading} />
-      )}
-      {screen === "register" && (
-        <RegisterScreen onRegister={handleRegister} goLogin={() => { setAuthError(""); setScreen("login"); }} error={authError} loading={authLoading} />
-      )}
-      {screen === "pending" && <PendingScreen status={pendingStatus} goLogin={() => setScreen("login")} />}
-      {screen === "menu" && currentUser && (
-        <MainMenu user={currentUser} setView={nav} onLogout={handleLogout} hasNew={hasNew} onOpenProfile={() => setShowProfile(true)} />
-      )}
-      {screen === "prices" && currentUser && (
-        <PricesScreen
-          user={currentUser}
-          products={products}
-          setProducts={setProducts}
-          productsLoading={productsLoading}
-          changedToday={changedToday}
-          setChangedToday={setChangedToday}
-          categories={categories}
-          setCategories={setCategories}
-          setView={nav}
-        />
-      )}
-      {screen === "orders" && currentUser && <OrdersScreen user={currentUser} orders={orders} setOrders={setOrders} setView={nav} />}
-      {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
-      {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} setView={nav} />}
-      {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
-    </div>
-  );
-}
-
-const rootEl = document.getElementById("root");
-ReactDOM.createRoot(rootEl).render(<App />);
+                  <button onClick={()
