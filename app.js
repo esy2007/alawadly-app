@@ -2131,4 +2131,305 @@ function AdminScreen({ user, users, setUsers, setView }) {
         </section>
 
         <section>
-          <h2 className="font-bold text-sm text-sky-400 mb-3">الم
+          <h2 className="font-bold text-sm text-sky-400 mb-3">المستخدمون المعتمدون ({approved.length})</h2>
+          {approved.length === 0 && <p className="text-sm text-[#6B7078]">لا يوجد مستخدمين بعد</p>}
+          <div className="space-y-3">
+            {approved.map((u) => (
+              <div key={u.id} className="panel rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="font-bold text-sm flex items-center gap-2 text-white">{u.name} <StatusStamp status={u.status} /></div>
+                  <button onClick={() => removeUser(u.id)} className="text-rose-400 hover:text-rose-300"><Icon name="Trash2" size={16} /></button>
+                </div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
+                    <input type="checkbox" checked={!!u.permissions?.manageProducts} onChange={() => togglePermission(u, "manageProducts")} />
+                    صلاحية إضافة المنتجات
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
+                    <input type="checkbox" checked={!!u.permissions?.deleteProducts} onChange={() => togglePermission(u, "deleteProducts")} />
+                    صلاحية حذف المنتجات
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
+                    <input type="checkbox" checked={!!u.permissions?.editPrices} onChange={() => togglePermission(u, "editPrices")} />
+                    صلاحية تعديل الأسعار
+                  </label>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Root App ----------
+function App() {
+  const [booting, setBooting] = useState(true);
+  const [users, setUsers] = useState([DEFAULT_ADMIN]);
+  const [products, setProducts] = useState([]);
+  const [changedToday, setChangedToday] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [transfers, setTransfers] = useState([]);
+  const [stockAlerts, setStockAlerts] = useState([]);
+  const [screen, setScreen] = useState("login");
+  const [currentUser, setCurrentUser] = useState(null);
+  const [pendingStatus, setPendingStatus] = useState("pending");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [lastSeen, setLastSeen] = useState({ prices: 0, reports: 0 });
+  const [reminder, setReminder] = useState(null);
+  const [showProfile, setShowProfile] = useState(false);
+  const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
+  const remindedDateRef = React.useRef(null);
+  const [syncError, setSyncError] = useState(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      setSyncError(e.detail);
+      setTimeout(() => setSyncError(null), 10000);
+    };
+    window.addEventListener("store-error", handler);
+    return () => window.removeEventListener("store-error", handler);
+  }, []);
+
+  const requestNotifPermission = async () => {
+    if (typeof Notification === "undefined") return;
+    try {
+      const perm = await Notification.requestPermission();
+      setNotifPermission(perm);
+    } catch {
+      // some embedded webviews reject this silently
+    }
+  };
+
+  useEffect(() => {
+    (async () => {
+      const storedUsers = await usersStore.loadAll();
+      let u = storedUsers || [];
+      if (!u.some((x) => x.role === "admin")) {
+        u = [...u, DEFAULT_ADMIN];
+        usersStore.upsert(DEFAULT_ADMIN);
+      }
+      setUsers(u);
+
+      // Products carry each item's photo and can get large as the catalog grows,
+      // so they're NOT fetched here — only when the Prices screen is opened (see nav()).
+      setChangedToday((await changesStore.loadAll()) || []);
+      setOrders((await ordersStore.loadAll()) || []);
+      setCategories((await categoriesStore.loadAll()) || []);
+      setTransfers((await transfersStore.loadAll()) || []);
+      setStockAlerts((await stockAlertsStore.loadAll()) || []);
+
+      // Restore session — works once this is a real web page or the APK.
+      // Claude's artifact preview sandbox blocks localStorage, so this won't
+      // auto-login while testing here, but will once deployed for real.
+      const sessionId = loadSessionUserId();
+      if (sessionId) {
+        const found = u.find((x) => x.id === sessionId && x.status === "approved");
+        if (found) {
+          setCurrentUser(found);
+          setLastSeen({ prices: Date.now(), reports: Date.now() });
+          setScreen("menu");
+        }
+      }
+
+      setBooting(false);
+    })();
+  }, []);
+
+
+  useEffect(() => {
+    const check = () => {
+      if (!currentUser) return;
+      const now = new Date();
+      const todayKey = now.toDateString();
+      const pastCutoff = now.getHours() > 11 || (now.getHours() === 11 && now.getMinutes() >= 30);
+      if (!pastCutoff || remindedDateRef.current === todayKey) return;
+      const mine = orders.filter((o) => !o.paid && o.employeeName === currentUser.name);
+      if (mine.length > 0) {
+        setReminder(mine);
+        remindedDateRef.current = todayKey;
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          try { new Notification("العوادلي", { body: `عندك ${mine.length} أوردر لسه مدفوعش` }); } catch {}
+        }
+      }
+    };
+    check();
+    const interval = setInterval(check, 60000);
+    return () => clearInterval(interval);
+  }, [currentUser, orders]);
+
+  const handleLogin = (name, password) => {
+    setAuthError("");
+    if (!name || !password) {
+      setAuthError("من فضلك اكتب الاسم وكلمة المرور");
+      return;
+    }
+    setAuthLoading(true);
+    const found = users.find((u) => namesMatch(u.name, name));
+    setAuthLoading(false);
+    if (!found || found.password !== password) {
+      setAuthError("الاسم أو كلمة المرور غلط");
+      return;
+    }
+    if (found.status !== "approved") {
+      setPendingStatus(found.status);
+      setScreen("pending");
+      return;
+    }
+    setCurrentUser(found);
+    saveSession(found);
+    setLastSeen({ prices: Date.now(), reports: Date.now() });
+    setScreen("menu");
+  };
+
+  const handleRegister = (name, password, confirm) => {
+    setAuthError("");
+    if (!name || !password) {
+      setAuthError("من فضلك املأ كل الحقول");
+      return;
+    }
+    if (password !== confirm) {
+      setAuthError("كلمة المرور غير متطابقة");
+      return;
+    }
+    if (users.some((u) => namesMatch(u.name, name))) {
+      setAuthError("الاسم ده مستخدم قبل كده");
+      return;
+    }
+    setAuthLoading(true);
+    const newUser = { id: uid(), name, password, role: "employee", status: "pending", permissions: { manageProducts: false, deleteProducts: false, editPrices: false } };
+    setUsers([...users, newUser]);
+    usersStore.upsert(newUser);
+    setAuthLoading(false);
+    setPendingStatus("pending");
+    setScreen("pending");
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setAuthError("");
+    clearSession();
+    setScreen("login");
+  };
+
+  const [productsLoaded, setProductsLoaded] = useState(false);
+  const [productsLoading, setProductsLoading] = useState(false);
+
+  const ensureProductsLoaded = async () => {
+    if (productsLoaded) return;
+    setProductsLoading(true);
+    const data = await productsStore.loadAll();
+    setProducts(data || []);
+    setProductsLoaded(true);
+    setProductsLoading(false);
+  };
+
+  // Wipes every product/order/transfer/category/change record — used to clear out
+  // test data. User accounts (admin + employees) are deliberately left untouched.
+  const performFullReset = async () => {
+    const targets = [productsStore, productImagesStore, ordersStore, transfersStore, categoriesStore, changesStore, stockAlertsStore];
+    for (const store of targets) {
+      const items = await store.loadAll();
+      if (items && items.length) {
+        for (const item of items) {
+          await store.remove(item.id);
+        }
+      }
+    }
+    setProducts([]);
+    setProductsLoaded(false);
+    setOrders([]);
+    setTransfers([]);
+    setCategories([]);
+    setChangedToday([]);
+    setStockAlerts([]);
+  };
+
+  const nav = (v) => {
+    if (v === "logout") {
+      handleLogout();
+      return;
+    }
+    if (v === "prices" || v === "reports") setLastSeen((prev) => ({ ...prev, [v]: Date.now() }));
+    if (v === "prices") ensureProductsLoaded();
+    if (v === "stock-alerts") stockAlertsStore.loadAll().then((data) => { if (data) setStockAlerts(data); });
+    setScreen(v);
+  };
+
+  const hasNew = {
+    prices: products.some((p) => (p.updatedAt || p.createdAt || 0) > lastSeen.prices),
+    reports: orders.some((o) => o.paid && (o.confirmedAt || o.createdAt) > lastSeen.reports),
+    ordersPending: orders.some((o) => !o.paid),
+    "stock-alerts": stockAlerts.some((a) => !a.resolved),
+  };
+
+  if (booting) {
+    return (
+      <div className="shop-root flex items-center justify-center">
+        <Icon name="Loader2" className="animate-spin text-sky-400" size={28} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="shop-root">
+      {syncError && (
+        <div className="fixed bottom-3 inset-x-3 z-[70] bg-rose-950/90 border border-rose-800 rounded-2xl p-3 modal-pop max-w-md mx-auto text-center">
+          <p className="text-rose-300 text-xs font-bold flex items-center justify-center gap-1.5">
+            <Icon name="AlertCircle" size={14} /> تعذر الاتصال بقاعدة البيانات — {syncError.collectionName}
+          </p>
+          {syncError.detail && <p className="text-rose-400/80 text-[10px] mt-1 break-words">{syncError.detail}</p>}
+        </div>
+      )}
+      {reminder && currentUser && (
+        <div className="fixed top-3 inset-x-3 z-[60] panel rounded-2xl p-4 modal-pop max-w-md mx-auto">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-bold text-amber-400 text-sm flex items-center gap-1.5"><Icon name="AlertCircle" size={14} /> عندك {reminder.length} أوردر لسه مدفوعش</p>
+              <p className="text-xs text-[#9A9EA6] mt-1">افتح "الطلبات" وأكد الدفع لما تستلم الفلوس.</p>
+              <button onClick={() => { setReminder(null); nav("orders"); }} className="text-xs text-sky-400 font-semibold mt-2 hover:underline">روح للطلبات دلوقتي</button>
+            </div>
+            <button onClick={() => setReminder(null)} className="text-[#9A9EA6] hover:text-white shrink-0"><Icon name="X" size={16} /></button>
+          </div>
+        </div>
+      )}
+      {showProfile && currentUser && (
+        <ProfileModal user={currentUser} users={users} setUsers={setUsers} onClose={() => setShowProfile(false)} onUpdated={(updated) => setCurrentUser(updated)} />
+      )}
+      {screen === "login" && (
+        <LoginScreen onLogin={handleLogin} goRegister={() => { setAuthError(""); setScreen("register"); }} error={authError} loading={authLoading} />
+      )}
+      {screen === "register" && (
+        <RegisterScreen onRegister={handleRegister} goLogin={() => { setAuthError(""); setScreen("login"); }} error={authError} loading={authLoading} />
+      )}
+      {screen === "pending" && <PendingScreen status={pendingStatus} goLogin={() => setScreen("login")} />}
+      {screen === "menu" && currentUser && (
+        <MainMenu user={currentUser} setView={nav} onLogout={handleLogout} hasNew={hasNew} onOpenProfile={() => setShowProfile(true)} onDevReset={performFullReset} />
+      )}
+      {screen === "prices" && currentUser && (
+        <PricesScreen
+          user={currentUser}
+          products={products}
+          setProducts={setProducts}
+          productsLoading={productsLoading}
+          changedToday={changedToday}
+          setChangedToday={setChangedToday}
+          categories={categories}
+          setCategories={setCategories}
+          setView={nav}
+        />
+      )}
+      {screen === "orders" && currentUser && <OrdersScreen user={currentUser} orders={orders} setOrders={setOrders} setView={nav} />}
+      {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
+      {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} setView={nav} />}
+      {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
+      {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
+    </div>
+  );
+}
+
+const rootEl = document.getElementById("root");
+ReactDOM.createRoot(rootEl).render(<App />);
