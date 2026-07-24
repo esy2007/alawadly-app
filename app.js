@@ -1309,7 +1309,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
                             {tierRows(p[tier.key]).map((r, i) => (
                               <div key={i}>
                                 <span className="font-bold tabular-nums" style={{ color: tier.color }}>{r.price}</span>
-                                {r.label && <div className="text-[9px] text-[#7C818C] leading-tight">{r.label}</div>}
+                                {r.label && <div className="text-xs font-bold text-[#D4D4D8] leading-tight mt-0.5">{r.label}</div>}
                               </div>
                             ))}
                           </div>
@@ -2012,6 +2012,14 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
   const unresolved = stockAlerts.filter((a) => !a.resolved).sort((a, b) => b.reportedAt - a.reportedAt);
   const resolved = stockAlerts.filter((a) => a.resolved).sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0));
   const [showResolved, setShowResolved] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    const fresh = await stockAlertsStore.loadAll();
+    setRefreshing(false);
+    if (fresh) setStockAlerts(fresh);
+  };
 
   const resolve = (alert) => {
     const updated = { ...alert, resolved: true, resolvedAt: Date.now() };
@@ -2048,6 +2056,10 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
     <div className="shop-root">
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="تنبيهات المخزون" />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
+        <button onClick={handleRefresh} disabled={refreshing} className="icon-btn rounded-xl px-3 py-2 mb-3 text-xs font-semibold flex items-center gap-1.5">
+          <Icon name="RefreshCw" size={14} className={refreshing ? "animate-spin" : ""} /> تحديث
+        </button>
+
         <div className="space-y-3 pb-4">
           {unresolved.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">مفيش تنبيهات جديدة</p>}
           {unresolved.map((a) => <AlertCard key={a.id} a={a} />)}
@@ -2119,11 +2131,4 @@ function AdminScreen({ user, users, setUsers, setView }) {
         </section>
 
         <section>
-          <h2 className="font-bold text-sm text-sky-400 mb-3">المستخدمون المعتمدون ({approved.length})</h2>
-          {approved.length === 0 && <p className="text-sm text-[#6B7078]">لا يوجد مستخدمين بعد</p>}
-          <div className="space-y-3">
-            {approved.map((u) => (
-              <div key={u.id} className="panel rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-bold text-sm flex items-center gap-2 text-white">{u.name} <StatusStamp status={u.status} /></div>
-                  <button onClick={()
+          <h2 className="font-bold text-sm text-sky-400 mb-3">الم
