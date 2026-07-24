@@ -1,0 +1,96 @@
+html, body { margin: 0; padding: 0; }
+
+      @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+
+      .shop-root {
+        font-family: 'Cairo', sans-serif;
+        direction: rtl;
+        background: #0B1224;
+        color: #F2F2F3;
+        min-height: 100vh;
+      }
+
+      @keyframes stampIn {
+        0% { transform: scale(2.2) rotate(-14deg); opacity: 0; }
+        60% { transform: scale(0.92) rotate(-6deg); opacity: 1; }
+        100% { transform: scale(1) rotate(-6deg); opacity: 1; }
+      }
+      .stamp-anim { animation: stampIn 0.45s cubic-bezier(.2,.8,.3,1.2); }
+
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .fade-up { animation: fadeUp 0.35s ease both; }
+
+      @keyframes modalPop {
+        from { opacity: 0; transform: scale(0.93) translateY(10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      .modal-pop { animation: modalPop 0.2s cubic-bezier(.2,.8,.3,1.1) both; }
+      .modal-backdrop { background: rgba(6,9,16,0.82); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+      @keyframes toastIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .toast-in { animation: toastIn 0.2s ease both; }
+
+      .panel {
+        background: #2A2E37;
+        border: 1px solid rgba(255,255,255,0.09);
+        box-shadow: 0 10px 25px -10px rgba(0,0,0,0.5);
+      }
+      .field-input {
+        background: #20232B;
+        border: 1px solid #3A3F4A;
+        color: #F2F2F3;
+      }
+      .field-input::placeholder { color: #7C818C; }
+      .field-input:focus { border-color: #38BDF8; }
+
+      .btn-sky { background: #0284C7; color: #F8FAFC; transition: background 0.15s ease, transform 0.1s ease; }
+      .btn-sky:hover { background: #0369A1; }
+      .btn-sky:active { transform: scale(0.98); }
+
+      .btn-emerald { background: #059669; color: #F8FAFC; transition: background 0.15s ease, transform 0.1s ease; }
+      .btn-emerald:hover { background: #047857; }
+      .btn-emerald:active { transform: scale(0.98); }
+
+      .btn-rose { background: rgba(225,29,72,0.15); color: #FB7185; border: 1px solid rgba(225,29,72,0.3); transition: all 0.15s ease; }
+      .btn-rose:hover { background: #E11D48; color: #F8FAFC; }
+
+      .btn-ghost { background: #20232B; color: #D4D4D8; border: 1px solid #3A3F4A; transition: background 0.15s ease; }
+      .btn-ghost:hover { background: #2A2E37; }
+
+      .btn-whatsapp { background: #25D366; color: #05310F; transition: background 0.15s ease, transform 0.1s ease; }
+      .btn-whatsapp:hover { background: #1FBD5A; }
+      .btn-whatsapp:active { transform: scale(0.98); }
+
+      .toggle-pill {
+        background: #20232B; color: #D4D4D8; border: 1px solid #3A3F4A;
+        transition: all 0.15s ease;
+      }
+      .toggle-pill.active-emerald { background: rgba(5,150,105,0.2); color: #34D399; border-color: #059669; }
+      .toggle-pill.active-rose { background: rgba(225,29,72,0.18); color: #FB7185; border-color: #E11D48; }
+      .toggle-pill.active-sky { background: rgba(2,132,199,0.18); color: #38BDF8; border-color: #0284C7; }
+      .toggle-pill.active-purple { background: rgba(168,85,247,0.18); color: #C084FC; border-color: #A855F7; }
+
+      .icon-btn {
+        background: rgba(58,63,74,0.5);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: #ADB2BC;
+        transition: all 0.15s ease;
+      }
+      .icon-btn:hover { color: #F2F2F3; }
+
+      .price-chip { background: rgba(255,255,255,0.05); border-radius: 0.5rem; padding: 0.35rem; text-align: center; }
+
+      .header-bar {
+        background: linear-gradient(120deg, #0EA5E9 0%, #6366F1 55%, #A855F7 100%);
+        border: 1px solid rgba(255,255,255,0.15);
+      }
+
+      ::selection { background: #38BDF8; color: #0B1224; }
+      input:focus, button:focus { outline: 2px solid #38BDF8; outline-offset: 1px; }
+    
