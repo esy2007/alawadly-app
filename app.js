@@ -234,6 +234,7 @@ const categoriesStore = makeCollectionStore("categories_col");
 const transfersStore = makeCollectionStore("transfers_col");
 const stockAlertsStore = makeCollectionStore("stock_alerts_col");
 const attendanceStore = makeCollectionStore("attendance_col");
+const withdrawalsStore = makeCollectionStore("withdrawals_col");
 
 const STORE_BY_COLLECTION = {
   users_col: usersStore,
@@ -245,10 +246,19 @@ const STORE_BY_COLLECTION = {
   transfers_col: transfersStore,
   stock_alerts_col: stockAlertsStore,
   attendance_col: attendanceStore,
+  withdrawals_col: withdrawalsStore,
 };
 
 function todayStr() {
   const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// The shop's "business day" for withdrawals runs 11am to 3am the next calendar
+// day — so a withdrawal logged at 1am still counts toward the previous day.
+function businessDayOf(ts) {
+  const d = new Date(ts);
+  if (d.getHours() < 3) d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
@@ -2325,20 +2335,9 @@ const ATTENDANCE_STATUS = {
 
 function DayEditModal({ dateStr, existing, onSave, onClose }) {
   const [status, setStatus] = useState(existing?.attendanceStatus || null);
-  const [withdrawal, setWithdrawal] = useState(existing?.withdrawalAmount != null ? String(existing.withdrawalAmount) : "");
-  const [note, setNote] = useState(existing?.notes || "");
-  const [error, setError] = useState("");
 
   const save = () => {
-    let w = null;
-    if (withdrawal.trim()) {
-      w = parseNum(withdrawal);
-      if (w === null || w < 0) {
-        setError("اكتب مبلغ سحب صحيح");
-        return;
-      }
-    }
-    onSave({ attendanceStatus: status, withdrawalAmount: w, notes: note.trim() });
+    onSave({ attendanceStatus: status });
   };
 
   const dayLabel = new Date(dateStr).toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
@@ -2358,11 +2357,33 @@ function DayEditModal({ dateStr, existing, onSave, onClose }) {
           </button>
         ))}
       </div>
-      <p className="text-xs text-[#9A9EA6] mb-1.5">سحب فلوس (اختياري)</p>
-      <input value={withdrawal} onChange={(e) => setWithdrawal(e.target.value)} placeholder="المبلغ" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
-      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="ملاحظة (اختياري)" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
-      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <button onClick={save} className="btn-emerald w-full rounded-xl py-2.5 font-bold">حفظ</button>
+    </Modal>
+  );
+}
+
+function WithdrawalEntryModal({ onSave, onClose }) {
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+
+  const save = () => {
+    const a = parseNum(amount);
+    if (a === null || a <= 0) {
+      setError("اكتب مبلغ صحيح");
+      return;
+    }
+    onSave({ amount: a, note: note.trim() });
+  };
+
+  return (
+    <Modal title="تسجيل سحب فلوس" accent="#FBBF24" onClose={onClose}>
+      <p className="text-xs text-[#9A9EA6] mb-1.5">المبلغ</p>
+      <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="المبلغ" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
+      <p className="text-xs text-[#9A9EA6] mb-1.5">ملاحظة (اختياري، تبقى ليك بس)</p>
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="مثال: مصاريف مشوار" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+      <button onClick={save} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تسجيل</button>
     </Modal>
   );
 }
@@ -2370,7 +2391,7 @@ function DayEditModal({ dateStr, existing, onSave, onClose }) {
 // Renders a real calendar grid for whichever month is selected — correctly
 // handles months of different lengths (28-31 days) and lines days up under the
 // right weekday column (week starts Saturday).
-function AttendanceCalendar({ employeeName, records, editable, onEditDay }) {
+function AttendanceCalendar({ employeeName, records, withdrawals, editable, onEditDay }) {
   const [monthDate, setMonthDate] = useState(() => {
     const d = new Date();
     d.setDate(1);
@@ -2389,16 +2410,23 @@ function AttendanceCalendar({ employeeName, records, editable, onEditDay }) {
     if (r.employeeName === employeeName && r.date.startsWith(monthPrefix)) byDate[r.date] = r;
   });
 
+  const withdrawalTotalByDate = {};
+  withdrawals.forEach((w) => {
+    if (w.employeeName === employeeName && w.businessDate.startsWith(monthPrefix)) {
+      withdrawalTotalByDate[w.businessDate] = (withdrawalTotalByDate[w.businessDate] || 0) + w.amount;
+    }
+  });
+
   const stats = Object.values(byDate).reduce(
     (acc, r) => {
       if (r.attendanceStatus === "present") acc.present++;
       else if (r.attendanceStatus === "absent") acc.absent++;
       else if (r.attendanceStatus === "half_morning" || r.attendanceStatus === "half_evening") acc.half++;
-      if (r.withdrawalAmount) acc.withdrawal += r.withdrawalAmount;
       return acc;
     },
-    { present: 0, absent: 0, half: 0, withdrawal: 0 }
+    { present: 0, absent: 0, half: 0 }
   );
+  const monthWithdrawalTotal = Object.values(withdrawalTotalByDate).reduce((s, v) => s + v, 0);
 
   const monthLabel = monthDate.toLocaleDateString("ar-EG", { month: "long", year: "numeric" });
   const weekdayLabels = ["س", "ح", "ن", "ث", "ر", "خ", "ج"];
@@ -2427,6 +2455,7 @@ function AttendanceCalendar({ employeeName, records, editable, onEditDay }) {
           const day = i + 1;
           const dateStr = `${monthPrefix}-${String(day).padStart(2, "0")}`;
           const rec = byDate[dateStr];
+          const withdrawalTotal = withdrawalTotalByDate[dateStr];
           const statusInfo = rec?.attendanceStatus ? ATTENDANCE_STATUS[rec.attendanceStatus] : null;
           const isToday = dateStr === today;
           return (
@@ -2441,7 +2470,7 @@ function AttendanceCalendar({ employeeName, records, editable, onEditDay }) {
             >
               <span className="text-[11px] font-bold text-white">{day}</span>
               {statusInfo && <span className="w-1.5 h-1.5 rounded-full" style={{ background: statusInfo.color }} />}
-              {rec?.withdrawalAmount ? <span className="text-[8px] text-amber-300 font-bold leading-none">{rec.withdrawalAmount}</span> : null}
+              {withdrawalTotal ? <span className="text-[8px] text-amber-300 font-bold leading-none">{withdrawalTotal}</span> : null}
             </button>
           );
         })}
@@ -2458,7 +2487,7 @@ function AttendanceCalendar({ employeeName, records, editable, onEditDay }) {
         </div>
         <div className="price-chip text-center">
           <p className="text-[10px] text-[#9A9EA6] mb-0.5">إجمالي السحب</p>
-          <p className="font-bold text-amber-400 tabular-nums">{stats.withdrawal}</p>
+          <p className="font-bold text-amber-400 tabular-nums">{monthWithdrawalTotal}</p>
         </div>
       </div>
 
@@ -2473,35 +2502,32 @@ function AttendanceCalendar({ employeeName, records, editable, onEditDay }) {
 
       {selectedDay && !editable && (
         <Modal title={new Date(selectedDay).toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" })} accent="#0EA5E9" onClose={() => setSelectedDay(null)}>
-          {byDate[selectedDay] ? (
-            <div className="space-y-2 text-sm">
-              <p className="text-[#D4D4D8]">
-                الحضور: <span className="font-bold" style={{ color: ATTENDANCE_STATUS[byDate[selectedDay].attendanceStatus]?.color }}>
-                  {ATTENDANCE_STATUS[byDate[selectedDay].attendanceStatus]?.label || "-"}
-                </span>
-              </p>
-              {byDate[selectedDay].withdrawalAmount ? (
-                <p className="text-[#D4D4D8]">سحب فلوس: <span className="font-bold text-amber-300">{byDate[selectedDay].withdrawalAmount}</span></p>
-              ) : null}
-              {byDate[selectedDay].notes && <p className="text-[#D4D4D8] bg-black/20 rounded-lg p-2 text-xs">{byDate[selectedDay].notes}</p>}
-            </div>
-          ) : (
-            <p className="text-sm text-[#6B7078]">مفيش بيانات مسجلة في اليوم ده</p>
-          )}
+          <div className="space-y-2 text-sm">
+            <p className="text-[#D4D4D8]">
+              الحضور: <span className="font-bold" style={{ color: ATTENDANCE_STATUS[byDate[selectedDay]?.attendanceStatus]?.color }}>
+                {ATTENDANCE_STATUS[byDate[selectedDay]?.attendanceStatus]?.label || "-"}
+              </span>
+            </p>
+            <p className="text-[#D4D4D8]">
+              إجمالي السحب في اليوم ده: <span className="font-bold text-amber-300">{withdrawalTotalByDate[selectedDay] || 0}</span>
+            </p>
+          </div>
         </Modal>
       )}
     </div>
   );
 }
 
-function AttendanceScreen({ user, users, attendance, setAttendance, setView }) {
+function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals, setWithdrawals, setView }) {
   const isAdmin = user.role === "admin";
   const [selectedEmployee, setSelectedEmployee] = useState(isAdmin ? null : user.name);
+  const [showWithdrawal, setShowWithdrawal] = useState(false);
 
   const handleRefresh = async () => {
-    const fresh = await attendanceStore.loadAll();
-    if (fresh) setAttendance(fresh);
-    return !!fresh;
+    const [freshAttendance, freshWithdrawals] = await Promise.all([attendanceStore.loadAll(), withdrawalsStore.loadAll()]);
+    if (freshAttendance) setAttendance(freshAttendance);
+    if (freshWithdrawals) setWithdrawals(freshWithdrawals);
+    return !!freshAttendance && !!freshWithdrawals;
   };
 
   const saveDay = (employeeName, dateStr, vals) => {
@@ -2511,13 +2537,26 @@ function AttendanceScreen({ user, users, attendance, setAttendance, setView }) {
       employeeName,
       date: dateStr,
       attendanceStatus: vals.attendanceStatus,
-      withdrawalAmount: vals.withdrawalAmount,
-      notes: vals.notes,
       createdAt: existing ? existing.createdAt : Date.now(),
       updatedAt: Date.now(),
     };
     setAttendance(existing ? attendance.map((r) => (r.id === existing.id ? record : r)) : [...attendance, record]);
     attendanceStore.upsert(record);
+  };
+
+  const saveWithdrawal = (vals) => {
+    const now = Date.now();
+    const record = {
+      id: uid(),
+      employeeName: user.name,
+      businessDate: businessDayOf(now),
+      amount: vals.amount,
+      note: vals.note,
+      createdAt: now,
+    };
+    setWithdrawals([...withdrawals, record]);
+    withdrawalsStore.upsert(record);
+    setShowWithdrawal(false);
   };
 
   if (isAdmin && !selectedEmployee) {
@@ -2539,6 +2578,10 @@ function AttendanceScreen({ user, users, attendance, setAttendance, setView }) {
     );
   }
 
+  const myWithdrawals = !isAdmin
+    ? withdrawals.filter((w) => w.employeeName === user.name).sort((a, b) => b.createdAt - a.createdAt).slice(0, 40)
+    : [];
+
   return (
     <div className="shop-root">
       <PullToRefresh onRefresh={handleRefresh} />
@@ -2552,9 +2595,34 @@ function AttendanceScreen({ user, users, attendance, setAttendance, setView }) {
         <AttendanceCalendar
           employeeName={selectedEmployee}
           records={attendance}
+          withdrawals={withdrawals}
           editable={!isAdmin}
           onEditDay={(dateStr, vals) => saveDay(selectedEmployee, dateStr, vals)}
         />
+
+        {!isAdmin && (
+          <>
+            <button onClick={() => setShowWithdrawal(true)} className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mt-2 mb-5">
+              <Icon name="Wallet" size={17} /> تسجيل سحب فلوس
+            </button>
+
+            <h3 className="font-bold text-sm text-white mb-2">سحوباتي</h3>
+            {myWithdrawals.length === 0 && <p className="text-center text-[#6B7078] py-4 text-xs">لسه ما سجلتش أي سحب</p>}
+            <div className="space-y-2">
+              {myWithdrawals.map((w) => (
+                <div key={w.id} className="panel rounded-xl p-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-[#9A9EA6]">{new Date(w.createdAt).toLocaleString("ar-EG")}</p>
+                    {w.note && <p className="text-xs text-[#D4D4D8] mt-0.5">{w.note}</p>}
+                  </div>
+                  <span className="font-bold text-amber-300 tabular-nums">{w.amount}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {showWithdrawal && <WithdrawalEntryModal onSave={saveWithdrawal} onClose={() => setShowWithdrawal(false)} />}
       </div>
     </div>
   );
@@ -2836,6 +2904,7 @@ function App() {
   const [transfers, setTransfers] = useState([]);
   const [stockAlerts, setStockAlerts] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [withdrawals, setWithdrawals] = useState([]);
   const [screen, setScreen] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
   const [pendingStatus, setPendingStatus] = useState("pending");
@@ -2885,6 +2954,7 @@ function App() {
       setTransfers((await transfersStore.loadAll()) || []);
       setStockAlerts((await stockAlertsStore.loadAll()) || []);
       setAttendance((await attendanceStore.loadAll()) || []);
+      setWithdrawals((await withdrawalsStore.loadAll()) || []);
 
       // Restore session — works once this is a real web page or the APK.
       // Claude's artifact preview sandbox blocks localStorage, so this won't
@@ -3116,7 +3186,7 @@ function App() {
       {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
       {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} setView={nav} />}
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
-      {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} setView={nav} />}
+      {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
       {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
