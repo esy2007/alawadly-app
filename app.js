@@ -970,12 +970,19 @@ function PullToRefresh({ onRefresh }) {
         setRefreshing(true);
         setRootShift(SETTLE_HEIGHT, true);
         setSpinnerVisual(SETTLE_HEIGHT, true);
-        const ok = await onRefresh();
-        refreshingRef.current = false;
-        setRefreshing(false);
-        setRootShift(0, true);
-        setSpinnerVisual(0, false);
-        pullDistRef.current = 0;
+        let ok = false;
+        try {
+          ok = await onRefresh();
+        } catch (e) {
+          console.error("pull-to-refresh failed", e);
+          ok = false;
+        } finally {
+          refreshingRef.current = false;
+          setRefreshing(false);
+          setRootShift(0, true);
+          setSpinnerVisual(0, false);
+          pullDistRef.current = 0;
+        }
         if (ok === false) {
           setFailed(true);
           setTimeout(() => setFailed(false), 3000);
@@ -3143,8 +3150,10 @@ function App() {
     if (productsLoaded) return;
     setProductsLoading(true);
     const data = await productsStore.loadAll();
-    setProducts(data || []);
-    setProductsLoaded(true);
+    if (data) {
+      setProducts(data);
+      setProductsLoaded(true);
+    }
     setProductsLoading(false);
   };
 
