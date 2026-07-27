@@ -1,6 +1,6 @@
 const { useState, useEffect } = React;
 
-const ICONS = {"Store": "🏪", "User": "👤", "Lock": "🔒", "Users": "👥", "Package": "📦", "BarChart3": "📊", "LogOut": "🚪", "Plus": "➕", "Trash2": "🗑", "Pencil": "✏️", "CheckCircle2": "✅", "XCircle": "❌", "Clock": "🕐", "ChevronLeft": "‹", "AlertCircle": "⚠️", "KeyRound": "🔑", "Check": "✓", "X": "✕", "Loader2": "⏳", "Search": "🔍", "Camera": "📷", "MessageCircle": "💬", "Truck": "🚚", "MapPin": "📍", "Banknote": "💵", "Smartphone": "📱", "RotateCcw": "↺", "Wallet": "👛", "RefreshCw": "🔄", "Bell": "🔔", "Settings": "⚙️", "Send": "📤", "Tag": "🏷", "ScanLine": "📷"};
+const ICONS = {"Store": "🏪", "User": "👤", "Lock": "🔒", "Users": "👥", "Package": "📦", "BarChart3": "📊", "LogOut": "🚪", "Plus": "➕", "Trash2": "🗑", "Pencil": "✏️", "CheckCircle2": "✅", "XCircle": "❌", "Clock": "🕐", "ChevronLeft": "‹", "AlertCircle": "⚠️", "KeyRound": "🔑", "Check": "✓", "X": "✕", "Loader2": "⏳", "Search": "🔍", "Camera": "📷", "MessageCircle": "💬", "Truck": "🚚", "MapPin": "📍", "Banknote": "💵", "Smartphone": "📱", "RotateCcw": "↺", "Wallet": "👛", "RefreshCw": "🔄", "Bell": "🔔", "Settings": "⚙️", "Send": "📤", "Tag": "🏷", "ScanLine": "📷", "Printer": "🖨️"};
 
 function Icon({ name, size = 18, className = "", style = {} }) {
   return (
@@ -439,6 +439,56 @@ function paymentLabel(o) {
   return { label: "-", color: "#9A9EA6" };
 }
 
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Opens a new tab formatted for an 80mm thermal receipt roll and triggers the
+// native Android print dialog, so it works with any printer already set up as
+// an Android print service (most Bluetooth/WiFi receipt printers support this).
+function printOrderReceipt(order) {
+  const pay = paymentLabel(order);
+  const win = window.open("", "_blank");
+  if (!win) return;
+  const dateStr = new Date(order.createdAt).toLocaleString("ar-EG");
+  win.document.write(`<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8" />
+<title>فاتورة</title>
+<style>
+  @page { margin: 2mm; size: 80mm auto; }
+  * { box-sizing: border-box; }
+  body { font-family: Tahoma, Arial, sans-serif; width: 76mm; margin: 0; padding: 2mm; font-size: 13px; color: #000; }
+  h1 { text-align: center; font-size: 17px; margin: 0 0 2px; }
+  .center { text-align: center; }
+  .line { border-top: 1px dashed #000; margin: 6px 0; }
+  .row { display: flex; justify-content: space-between; margin: 3px 0; }
+  .total { font-weight: bold; font-size: 16px; }
+  .muted { font-size: 11px; }
+</style>
+</head>
+<body>
+  <h1>العوادلي</h1>
+  <p class="center muted">فاتورة أوردر</p>
+  <div class="line"></div>
+  <div class="row"><span>المندوب</span><span>${escapeHtml(order.repName)}</span></div>
+  <div class="row"><span>المنطقة</span><span>${escapeHtml(order.area)}</span></div>
+  ${order.dispatchLocation ? `<div class="row"><span>مكان الخروج</span><span>${escapeHtml(order.dispatchLocation)}</span></div>` : ""}
+  <div class="line"></div>
+  <div class="row total"><span>الإجمالي</span><span>${order.price}</span></div>
+  <div class="row"><span>طريقة الدفع</span><span>${escapeHtml(pay.label)}</span></div>
+  <div class="line"></div>
+  ${order.notes ? `<p class="muted">ملاحظات: ${escapeHtml(order.notes)}</p>` : ""}
+  <p class="center muted">${dateStr}</p>
+  <p class="center muted">بواسطة: ${escapeHtml(order.employeeName)}</p>
+</body>
+</html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 300);
+}
+
 function validatePaymentMethod(pm, price) {
   if (!pm.paymentMethod) return "اختار طريقة الدفع";
   if (pm.paymentMethod === "split") {
@@ -858,13 +908,14 @@ function TierPriceEditor({ label, color, rows, setRows }) {
 // listens for a downward drag while the page is scrolled to the very top, and
 // calls onRefresh once the drag passes the threshold.
 function PullToRefresh({ onRefresh }) {
-  const [pullDist, setPullDist] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [failed, setFailed] = useState(false);
   const startY = React.useRef(null);
   const dragging = React.useRef(false);
   const pullDistRef = React.useRef(0);
   const refreshingRef = React.useRef(false);
+  const wrapRef = React.useRef(null);
+  const iconRef = React.useRef(null);
   const THRESHOLD = 70;
   const MAX_PULL = 110;
   const SETTLE_HEIGHT = 54;
@@ -876,6 +927,22 @@ function PullToRefresh({ onRefresh }) {
     const setRootShift = (px, animated) => {
       rootEl.style.transition = animated ? "transform 0.25s cubic-bezier(.22,.8,.25,1)" : "none";
       rootEl.style.transform = px ? `translateY(${px}px)` : "";
+    };
+    // Pure DOM mutation, no React re-render — this is what keeps the drag smooth
+    // even though the whole app runs through an in-browser Babel compile with no
+    // production build step.
+    const setSpinnerVisual = (dist, spinning) => {
+      const wrap = wrapRef.current;
+      const icon = iconRef.current;
+      if (!wrap || !icon) return;
+      wrap.style.opacity = dist > 2 ? String(Math.min(dist / 40, 1)) : "0";
+      if (spinning) {
+        icon.classList.add("animate-spin");
+        icon.style.transform = "";
+      } else {
+        icon.classList.remove("animate-spin");
+        icon.style.transform = `rotate(${dist * 3}deg)`;
+      }
     };
 
     const onTouchStart = (e) => {
@@ -891,8 +958,8 @@ function PullToRefresh({ onRefresh }) {
         // slight resistance as you pull further, like a native rubber-band feel
         const dist = Math.min(dy * 0.55, MAX_PULL);
         pullDistRef.current = dist;
-        setPullDist(dist);
         setRootShift(dist, false);
+        setSpinnerVisual(dist, false);
       }
     };
     const onTouchEnd = async () => {
@@ -902,20 +969,21 @@ function PullToRefresh({ onRefresh }) {
         refreshingRef.current = true;
         setRefreshing(true);
         setRootShift(SETTLE_HEIGHT, true);
+        setSpinnerVisual(SETTLE_HEIGHT, true);
         const ok = await onRefresh();
         refreshingRef.current = false;
         setRefreshing(false);
         setRootShift(0, true);
+        setSpinnerVisual(0, false);
         pullDistRef.current = 0;
-        setPullDist(0);
         if (ok === false) {
           setFailed(true);
           setTimeout(() => setFailed(false), 3000);
         }
       } else {
         setRootShift(0, true);
+        setSpinnerVisual(0, false);
         pullDistRef.current = 0;
-        setPullDist(0);
       }
     };
     window.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -934,17 +1002,13 @@ function PullToRefresh({ onRefresh }) {
   // indicator stays fixed to the real viewport instead of sliding down with the content.
   return ReactDOM.createPortal(
     <>
-      {(pullDist > 2 || refreshing) && (
-        <div className="fixed top-3 inset-x-0 z-[100] flex justify-center pointer-events-none" style={{ opacity: Math.min((refreshing ? SETTLE_HEIGHT : pullDist) / 40, 1) }}>
-          <div className="bg-[#2A2E37] border border-white/10 rounded-full p-2.5 shadow-lg">
-            <Icon name="Loader2"
-              size={18}
-              className={refreshing ? "text-sky-400 animate-spin" : "text-sky-400"}
-              style={refreshing ? {} : { transform: `rotate(${pullDist * 3}deg)` }}
-            />
+      <div ref={wrapRef} className="fixed top-3 inset-x-0 z-[100] flex justify-center pointer-events-none" style={{ opacity: 0 }}>
+        <div className="bg-[#2A2E37] border border-white/10 rounded-full p-2.5 shadow-lg">
+          <div ref={iconRef}>
+            <Icon name="Loader2" size={18} className="text-sky-400" />
           </div>
         </div>
-      )}
+      </div>
       {failed && (
         <div className="fixed top-3 inset-x-3 z-[100] flex justify-center pointer-events-none">
           <div className="bg-rose-950/90 border border-rose-800 rounded-xl px-4 py-2 toast-in flex items-center gap-1.5">
@@ -1983,11 +2047,12 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
                   <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
                 )}
 
-                {!o.paid && (
-                  <div className="flex justify-end gap-2 mt-2">
+                <div className="flex justify-end gap-2 mt-2">
+                  <button onClick={() => printOrderReceipt(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+                  {!o.paid && (
                     <button onClick={() => openConfirm(o)} className="text-xs btn-emerald px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="CheckCircle2" size={13} /> تم الدفع</button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             );
           })}
@@ -2312,9 +2377,12 @@ function ReportsScreen({ user, orders, setView }) {
                   </div>
                 )}
 
-                <button onClick={() => setExpandedId(expanded ? null : o.id)} className="text-xs text-sky-400 font-semibold mt-2 hover:underline">
-                  {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
-                </button>
+                <div className="flex items-center justify-between mt-2">
+                  <button onClick={() => setExpandedId(expanded ? null : o.id)} className="text-xs text-sky-400 font-semibold hover:underline">
+                    {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
+                  </button>
+                  <button onClick={() => printOrderReceipt(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+                </div>
               </div>
             );
           })}
