@@ -916,6 +916,8 @@ function PullToRefresh({ onRefresh }) {
   const refreshingRef = React.useRef(false);
   const wrapRef = React.useRef(null);
   const iconRef = React.useRef(null);
+  const onRefreshRef = React.useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
   const THRESHOLD = 70;
   const MAX_PULL = 110;
   const SETTLE_HEIGHT = 54;
@@ -972,7 +974,7 @@ function PullToRefresh({ onRefresh }) {
         setSpinnerVisual(SETTLE_HEIGHT, true);
         let ok = false;
         try {
-          ok = await onRefresh();
+          ok = await onRefreshRef.current();
         } catch (e) {
           console.error("pull-to-refresh failed", e);
           ok = false;
@@ -1003,7 +1005,7 @@ function PullToRefresh({ onRefresh }) {
       rootEl.style.transform = "";
       rootEl.style.transition = "";
     };
-  }, [onRefresh]);
+  }, []);
 
   // Portaled straight to <body> (a sibling of the #root div being shifted), so this
   // indicator stays fixed to the real viewport instead of sliding down with the content.
