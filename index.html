@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="العوادلي" />
 
-<link rel="stylesheet" href="style.css?v=16" />
+<link rel="stylesheet" href="style.css?v=19" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -22,11 +22,23 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" src="app.js?v=16"></script>
+<script type="text/babel" src="app.js?v=19"></script>
 <script>
   if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("sw.js").catch(() => {});
+    window.addEventListener("load", async () => {
+      const registration = await navigator.serviceWorker.register("sw.js").catch(() => null);
+      if (registration && "periodicSync" in registration) {
+        try {
+          const status = await navigator.permissions.query({ name: "periodic-background-sync" });
+          if (status.state === "granted") {
+            await registration.periodicSync.register("check-alawadly-alerts", {
+              minInterval: 60 * 60 * 1000,
+            });
+          }
+        } catch (e) {
+          // Not supported on this browser/device — silently skip.
+        }
+      }
     });
   }
 </script>

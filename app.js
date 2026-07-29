@@ -235,6 +235,7 @@ const transfersStore = makeCollectionStore("transfers_col");
 const stockAlertsStore = makeCollectionStore("stock_alerts_col");
 const attendanceStore = makeCollectionStore("attendance_col");
 const withdrawalsStore = makeCollectionStore("withdrawals_col");
+const salesStore = makeCollectionStore("sales_col");
 
 const STORE_BY_COLLECTION = {
   users_col: usersStore,
@@ -247,6 +248,7 @@ const STORE_BY_COLLECTION = {
   stock_alerts_col: stockAlertsStore,
   attendance_col: attendanceStore,
   withdrawals_col: withdrawalsStore,
+  sales_col: salesStore,
 };
 
 function todayStr() {
@@ -489,6 +491,50 @@ function printOrderReceipt(order) {
   setTimeout(() => { win.print(); }, 300);
 }
 
+// Same 80mm-thermal-roll approach as printOrderReceipt, but itemized for a cashier sale.
+function printSaleReceipt(sale) {
+  const pay = paymentLabel(sale);
+  const win = window.open("", "_blank");
+  if (!win) return;
+  const dateStr = new Date(sale.createdAt).toLocaleString("ar-EG");
+  const itemsHtml = sale.items
+    .map((it) => `<div class="row"><span>${escapeHtml(it.productName)} × ${it.qty}</span><span>${it.lineTotal}</span></div>`)
+    .join("");
+  win.document.write(`<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8" />
+<title>فاتورة بيع</title>
+<style>
+  @page { margin: 2mm; size: 80mm auto; }
+  * { box-sizing: border-box; }
+  body { font-family: Tahoma, Arial, sans-serif; width: 76mm; margin: 0; padding: 2mm; font-size: 13px; color: #000; }
+  h1 { text-align: center; font-size: 17px; margin: 0 0 2px; }
+  .center { text-align: center; }
+  .line { border-top: 1px dashed #000; margin: 6px 0; }
+  .row { display: flex; justify-content: space-between; margin: 3px 0; }
+  .total { font-weight: bold; font-size: 16px; }
+  .muted { font-size: 11px; }
+</style>
+</head>
+<body>
+  <h1>العوادلي</h1>
+  <p class="center muted">فاتورة كاشير</p>
+  <div class="line"></div>
+  ${itemsHtml}
+  <div class="line"></div>
+  <div class="row total"><span>الإجمالي</span><span>${sale.total}</span></div>
+  <div class="row"><span>طريقة الدفع</span><span>${escapeHtml(pay.label)}</span></div>
+  <div class="line"></div>
+  <p class="center muted">${dateStr}</p>
+  <p class="center muted">بواسطة: ${escapeHtml(sale.employeeName)}</p>
+</body>
+</html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 300);
+}
+
 function validatePaymentMethod(pm, price) {
   if (!pm.paymentMethod) return "اختار طريقة الدفع";
   if (pm.paymentMethod === "split") {
@@ -720,14 +766,15 @@ function ProfileModal({ user, users, setUsers, onClose, onUpdated }) {
 // ---------- Main menu ----------
 function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile, onDevReset }) {
   const items = [
-    { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: true, accent: "#10B981" },
+    { key: "cashier", label: "الكاشير", desc: "بيع منتجات وطباعة فاتورة", icon: "Wallet", enabled: true, accent: "#10B981" },
+    { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: user.role === "admin", accent: "#10B981" },
     { key: "orders", label: "الطلبات", desc: "تسجيل أوردرات جديدة", icon: "Package", enabled: true, accent: "#F59E0B" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
     { key: "attendance", label: "الحضور والسحب", desc: "سجل حضورك وسحوباتك", icon: "Clock", enabled: true, accent: "#0EA5E9" },
     { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: user.role === "admin", accent: "#0EA5E9" },
     { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: user.role === "admin", accent: "#F43F5E" },
     { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: user.role === "admin", accent: "#F59E0B" },
-  ].filter((i) => (i.key !== "admin" && i.key !== "reports" && i.key !== "stock-alerts") || user.role === "admin");
+  ].filter((i) => (i.key !== "admin" && i.key !== "reports" && i.key !== "stock-alerts" && i.key !== "prices") || user.role === "admin");
 
   // Hidden developer entry point: admin taps the version label 3 times within
   // ~1.2s to reach the password-gated full data reset (used for clearing test data).
@@ -908,45 +955,16 @@ function TierPriceEditor({ label, color, rows, setRows }) {
 // listens for a downward drag while the page is scrolled to the very top, and
 // calls onRefresh once the drag passes the threshold.
 function PullToRefresh({ onRefresh }) {
+  const [pullDist, setPullDist] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [failed, setFailed] = useState(false);
   const startY = React.useRef(null);
   const dragging = React.useRef(false);
   const pullDistRef = React.useRef(0);
   const refreshingRef = React.useRef(false);
-  const wrapRef = React.useRef(null);
-  const iconRef = React.useRef(null);
-  const onRefreshRef = React.useRef(onRefresh);
-  onRefreshRef.current = onRefresh;
   const THRESHOLD = 70;
-  const MAX_PULL = 110;
-  const SETTLE_HEIGHT = 54;
 
   useEffect(() => {
-    const rootEl = document.getElementById("root");
-    if (!rootEl) return;
-
-    const setRootShift = (px, animated) => {
-      rootEl.style.transition = animated ? "transform 0.25s cubic-bezier(.22,.8,.25,1)" : "none";
-      rootEl.style.transform = px ? `translateY(${px}px)` : "";
-    };
-    // Pure DOM mutation, no React re-render — this is what keeps the drag smooth
-    // even though the whole app runs through an in-browser Babel compile with no
-    // production build step.
-    const setSpinnerVisual = (dist, spinning) => {
-      const wrap = wrapRef.current;
-      const icon = iconRef.current;
-      if (!wrap || !icon) return;
-      wrap.style.opacity = dist > 2 ? String(Math.min(dist / 40, 1)) : "0";
-      if (spinning) {
-        icon.classList.add("animate-spin");
-        icon.style.transform = "";
-      } else {
-        icon.classList.remove("animate-spin");
-        icon.style.transform = `rotate(${dist * 3}deg)`;
-      }
-    };
-
     const onTouchStart = (e) => {
       if (window.scrollY <= 0 && !refreshingRef.current) {
         startY.current = e.touches[0].clientY;
@@ -957,11 +975,9 @@ function PullToRefresh({ onRefresh }) {
       if (!dragging.current) return;
       const dy = e.touches[0].clientY - startY.current;
       if (dy > 0) {
-        // slight resistance as you pull further, like a native rubber-band feel
-        const dist = Math.min(dy * 0.55, MAX_PULL);
+        const dist = Math.min(dy * 0.5, 90);
         pullDistRef.current = dist;
-        setRootShift(dist, false);
-        setSpinnerVisual(dist, false);
+        setPullDist(dist);
       }
     };
     const onTouchEnd = async () => {
@@ -970,29 +986,24 @@ function PullToRefresh({ onRefresh }) {
       if (pullDistRef.current > THRESHOLD) {
         refreshingRef.current = true;
         setRefreshing(true);
-        setRootShift(SETTLE_HEIGHT, true);
-        setSpinnerVisual(SETTLE_HEIGHT, true);
+        pullDistRef.current = 0;
+        setPullDist(0);
         let ok = false;
         try {
-          ok = await onRefreshRef.current();
+          ok = await onRefresh();
         } catch (e) {
           console.error("pull-to-refresh failed", e);
           ok = false;
-        } finally {
-          refreshingRef.current = false;
-          setRefreshing(false);
-          setRootShift(0, true);
-          setSpinnerVisual(0, false);
-          pullDistRef.current = 0;
         }
+        refreshingRef.current = false;
+        setRefreshing(false);
         if (ok === false) {
           setFailed(true);
           setTimeout(() => setFailed(false), 3000);
         }
       } else {
-        setRootShift(0, true);
-        setSpinnerVisual(0, false);
         pullDistRef.current = 0;
+        setPullDist(0);
       }
     };
     window.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -1002,22 +1013,21 @@ function PullToRefresh({ onRefresh }) {
       window.removeEventListener("touchstart", onTouchStart);
       window.removeEventListener("touchmove", onTouchMove);
       window.removeEventListener("touchend", onTouchEnd);
-      rootEl.style.transform = "";
-      rootEl.style.transition = "";
     };
-  }, []);
+  }, [onRefresh]);
 
-  // Portaled straight to <body> (a sibling of the #root div being shifted), so this
-  // indicator stays fixed to the real viewport instead of sliding down with the content.
-  return ReactDOM.createPortal(
+  return (
     <>
-      <div ref={wrapRef} className="fixed top-3 inset-x-0 z-[100] flex justify-center pointer-events-none" style={{ opacity: 0 }}>
-        <div className="bg-[#2A2E37] border border-white/10 rounded-full p-2.5 shadow-lg">
-          <div ref={iconRef}>
-            <Icon name="Loader2" size={18} className="text-sky-400" />
+      {(pullDist > 2 || refreshing) && (
+        <div
+          className="fixed top-0 inset-x-0 z-[100] flex items-start justify-center pointer-events-none"
+          style={{ height: refreshing ? 50 : pullDist, transition: refreshing ? "height 0.15s ease" : "none" }}
+        >
+          <div className="bg-[#2A2E37] border border-white/10 rounded-full p-2.5 shadow-lg mt-2">
+            <Icon name="Loader2" size={18} className={refreshing ? "text-sky-400 animate-spin" : "text-sky-400"} />
           </div>
         </div>
-      </div>
+      )}
       {failed && (
         <div className="fixed top-3 inset-x-3 z-[100] flex justify-center pointer-events-none">
           <div className="bg-rose-950/90 border border-rose-800 rounded-xl px-4 py-2 toast-in flex items-center gap-1.5">
@@ -1026,8 +1036,7 @@ function PullToRefresh({ onRefresh }) {
           </div>
         </div>
       )}
-    </>,
-    document.body
+    </>
   );
 }
 
@@ -1254,6 +1263,220 @@ function makeEmptyRow() {
 }
 function makeEmptyNewProduct() {
   return { name: "", image: null, barcodes: [""], costPrice: "", categoryId: null, retailRows: [makeEmptyRow()], halfRows: [makeEmptyRow()], wholesaleRows: [makeEmptyRow()] };
+}
+
+// ---------- Cashier ----------
+function ProductPickerModal({ product, onAdd, onClose }) {
+  const TIERS = [
+    { key: "retail", label: "قطاعي", color: "#34D399" },
+    { key: "half", label: "نص جملة", color: "#FBBF24" },
+    { key: "wholesale", label: "جملة", color: "#FB7185" },
+  ];
+  const [tierKey, setTierKey] = useState("retail");
+  const rows = tierRows(product[tierKey]);
+  const [rowIndex, setRowIndex] = useState(0);
+  const [qty, setQty] = useState("1");
+  const [error, setError] = useState("");
+
+  useEffect(() => { setRowIndex(0); }, [tierKey]);
+
+  const confirm = () => {
+    const q = parseNum(qty);
+    if (q === null || q <= 0) {
+      setError("اكتب عدد صحيح");
+      return;
+    }
+    onAdd(tierKey, rows[rowIndex] || rows[0], q);
+  };
+
+  return (
+    <Modal title={product.name} accent="#10B981" onClose={onClose}>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        {TIERS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTierKey(t.key)}
+            className="toggle-pill rounded-xl py-2 text-xs font-bold"
+            style={tierKey === t.key ? { background: `${t.color}33`, color: t.color, borderColor: t.color } : {}}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {rows.length > 1 ? (
+        <div className="space-y-1.5 mb-3">
+          {rows.map((r, i) => (
+            <button
+              key={i}
+              onClick={() => setRowIndex(i)}
+              className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-xs ${rowIndex === i ? "toggle-pill active-sky" : "field-input"}`}
+            >
+              <span>{r.label || "السعر الأساسي"}</span>
+              <span className="font-bold">{r.price}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-center text-lg font-bold text-white mb-3">{rows[0]?.price}</p>
+      )}
+
+      <p className="text-xs text-[#9A9EA6] mb-1.5">الكمية</p>
+      <input value={qty} onChange={(e) => setQty(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+      <button onClick={confirm} className="btn-emerald w-full rounded-xl py-2.5 font-bold">إضافة للسلة</button>
+    </Modal>
+  );
+}
+
+function CashierScreen({ user, products, productsLoading, setSales, setView }) {
+  const [query, setQuery] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [cart, setCart] = useState([]);
+  const [pickerProduct, setPickerProduct] = useState(null);
+  const [showCheckout, setShowCheckout] = useState(false);
+  const [confirmForm, setConfirmForm] = useState(EMPTY_CONFIRM_FORM);
+  const [confirmError, setConfirmError] = useState("");
+  const [lastSale, setLastSale] = useState(null);
+
+  const normalizedQuery = normalizeArabic(query);
+  const results = normalizedQuery ? products.filter((p) => normalizeArabic(p.name).includes(normalizedQuery)).slice(0, 12) : [];
+  const total = cart.reduce((s, it) => s + it.lineTotal, 0);
+  const TIER_LABELS = { retail: "قطاعي", half: "نص جملة", wholesale: "جملة" };
+
+  const addToCart = (tierKey, row, qty) => {
+    const item = {
+      id: uid(),
+      productName: pickerProduct.name,
+      tierLabel: TIER_LABELS[tierKey],
+      priceNote: row.label,
+      unitPrice: row.price,
+      qty,
+      lineTotal: row.price * qty,
+    };
+    setCart((c) => [...c, item]);
+    setPickerProduct(null);
+    setQuery("");
+  };
+
+  const removeFromCart = (id) => setCart((c) => c.filter((it) => it.id !== id));
+
+  const handleScanResult = (code) => {
+    setScanning(false);
+    const match = products.find((p) => (p.barcodes && p.barcodes.includes(code)) || p.barcode === code);
+    if (match) setPickerProduct(match);
+  };
+
+  const completeSale = () => {
+    const err = validatePaymentMethod(confirmForm, total);
+    if (err) {
+      setConfirmError(err);
+      return;
+    }
+    const isSplit = confirmForm.paymentMethod === "split";
+    const sale = {
+      id: uid(),
+      employeeName: user.name,
+      items: cart.map((it) => ({ productName: it.productName, tierLabel: it.tierLabel, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
+      total,
+      paid: true,
+      paymentMethod: confirmForm.paymentMethod,
+      splitTransferMethod: isSplit ? confirmForm.splitTransferMethod : null,
+      cashAmount: isSplit ? parseNum(confirmForm.cashAmount) : null,
+      transferAmount: isSplit ? parseNum(confirmForm.transferAmount) : null,
+      createdAt: Date.now(),
+    };
+    setSales((s) => [...s, sale]);
+    salesStore.upsert(sale);
+    setLastSale(sale);
+    setCart([]);
+    setShowCheckout(false);
+    setConfirmForm(EMPTY_CONFIRM_FORM);
+    setConfirmError("");
+  };
+
+  return (
+    <div className="shop-root">
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الكاشير" />
+      <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-6">
+        {productsLoading && products.length === 0 && (
+          <div className="flex items-center justify-center gap-2 py-10 text-[#9A9EA6] text-sm">
+            <Icon name="Loader2" size={18} className="animate-spin" /> بيحمّل المنتجات...
+          </div>
+        )}
+
+        <div className="flex gap-2 mb-3">
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن منتج تضيفه..." className="field-input flex-1 rounded-xl px-4 py-2.5 text-sm" />
+          <button onClick={() => setScanning(true)} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
+        </div>
+
+        {results.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {results.map((p) => (
+              <button key={p.id} onClick={() => setPickerProduct(p)} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
+                <span className="font-bold text-sm text-white">{p.name}</span>
+                <Icon name="Plus" size={16} className="text-emerald-400" />
+              </button>
+            ))}
+          </div>
+        )}
+
+        <h3 className="font-bold text-sm text-white mb-2">السلة</h3>
+        {cart.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
+        <div className="space-y-2 mb-4">
+          {cart.map((it) => (
+            <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between">
+              <div>
+                <p className="font-bold text-sm text-white">{it.productName}</p>
+                <p className="text-xs text-[#9A9EA6]">{it.tierLabel}{it.priceNote ? ` · ${it.priceNote}` : ""} × {it.qty}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
+                <button onClick={() => removeFromCart(it.id)} className="text-rose-400"><Icon name="X" size={16} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {cart.length > 0 && (
+          <div className="panel rounded-2xl p-4 flex items-center justify-between mb-4">
+            <span className="text-sm text-[#9A9EA6]">الإجمالي</span>
+            <span className="font-bold text-xl text-sky-400 tabular-nums">{total}</span>
+          </div>
+        )}
+
+        <button
+          disabled={cart.length === 0}
+          onClick={() => setShowCheckout(true)}
+          className="btn-emerald w-full rounded-xl py-3 font-bold flex items-center justify-center gap-2 disabled:opacity-40"
+        >
+          <Icon name="CheckCircle2" size={18} /> إتمام البيع
+        </button>
+
+        {pickerProduct && <ProductPickerModal product={pickerProduct} onAdd={addToCart} onClose={() => setPickerProduct(null)} />}
+        {scanning && <BarcodeScannerModal onDetected={handleScanResult} onClose={() => setScanning(false)} />}
+
+        {showCheckout && (
+          <Modal title="إتمام البيع" accent="#10B981" onClose={() => setShowCheckout(false)}>
+            <p className="text-center text-2xl font-bold text-white mb-4 tabular-nums">{total}</p>
+            <PaymentMethodPicker value={confirmForm} onChange={setConfirmForm} />
+            {confirmError && <p className="text-rose-400 text-xs mb-3">{confirmError}</p>}
+            <button onClick={completeSale} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تأكيد البيع</button>
+          </Modal>
+        )}
+
+        {lastSale && (
+          <Modal title="تم البيع بنجاح" accent="#34D399" onClose={() => setLastSale(null)}>
+            <p className="text-sm text-[#D4D4D8] mb-4">الإجمالي: <span className="font-bold text-emerald-400 tabular-nums">{lastSale.total}</span></p>
+            <button onClick={() => printSaleReceipt(lastSale)} className="btn-sky w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-2">
+              <Icon name="Printer" size={16} /> طباعة الفاتورة
+            </button>
+            <button onClick={() => setLastSale(null)} className="btn-ghost w-full rounded-xl py-2.5 font-bold">إغلاق</button>
+          </Modal>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, setView }) {
@@ -2982,6 +3205,7 @@ function App() {
   const [stockAlerts, setStockAlerts] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [withdrawals, setWithdrawals] = useState([]);
+  const [sales, setSales] = useState([]);
   const [screen, setScreen] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
   const [pendingStatus, setPendingStatus] = useState("pending");
@@ -3032,6 +3256,7 @@ function App() {
       setStockAlerts((await stockAlertsStore.loadAll()) || []);
       setAttendance((await attendanceStore.loadAll()) || []);
       setWithdrawals((await withdrawalsStore.loadAll()) || []);
+      setSales((await salesStore.loadAll()) || []);
 
       // Restore session — works once this is a real web page or the APK.
       // Claude's artifact preview sandbox blocks localStorage, so this won't
@@ -3186,7 +3411,7 @@ function App() {
       return;
     }
     if (v === "prices" || v === "reports") setLastSeen((prev) => ({ ...prev, [v]: Date.now() }));
-    if (v === "prices") ensureProductsLoaded();
+    if (v === "prices" || v === "cashier") ensureProductsLoaded();
     if (v === "stock-alerts") stockAlertsStore.loadAll().then((data) => { if (data) setStockAlerts(data); });
     setScreen(v);
   };
@@ -3266,6 +3491,7 @@ function App() {
       {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} setView={nav} />}
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
+      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} setSales={setSales} setView={nav} />}
       {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
