@@ -1266,19 +1266,56 @@ function makeEmptyNewProduct() {
 }
 
 // ---------- Cashier ----------
-function ProductPickerModal({ product, onAdd, onClose }) {
-  const TIERS = [
-    { key: "retail", label: "قطاعي", color: "#34D399" },
-    { key: "half", label: "نص جملة", color: "#FBBF24" },
-    { key: "wholesale", label: "جملة", color: "#FB7185" },
-  ];
-  const [tierKey, setTierKey] = useState("retail");
+const CASHIER_TIERS = [
+  { key: "retail", label: "قطاعي", color: "#34D399" },
+  { key: "half", label: "نص جملة", color: "#FBBF24" },
+  { key: "wholesale", label: "جملة", color: "#FB7185" },
+];
+
+function NewInvoiceTierModal({ onSelect, onClose }) {
+  return (
+    <Modal title="فاتورة جديدة" accent="#10B981" onClose={onClose}>
+      <p className="text-sm text-[#D4D4D8] mb-3">الزبون ده بيشتري بسعر إيه؟</p>
+      <div className="space-y-2">
+        {CASHIER_TIERS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => onSelect(t.key)}
+            className="w-full rounded-xl py-3 font-bold border"
+            style={{ background: `${t.color}22`, color: t.color, borderColor: t.color }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function ProductPickerModal({ product, invoice, onAdd, onSuppressWarning, onClose }) {
+  const [tierKey, setTierKey] = useState(invoice.tierKey);
   const rows = tierRows(product[tierKey]);
   const [rowIndex, setRowIndex] = useState(0);
   const [qty, setQty] = useState("1");
+  const [priceOverride, setPriceOverride] = useState(String(rows[0]?.price ?? ""));
   const [error, setError] = useState("");
+  const [warning, setWarning] = useState(null);
 
-  useEffect(() => { setRowIndex(0); }, [tierKey]);
+  useEffect(() => {
+    const newRows = tierRows(product[tierKey]);
+    setRowIndex(0);
+    setPriceOverride(String(newRows[0]?.price ?? ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tierKey]);
+
+  const pickRow = (i) => {
+    setRowIndex(i);
+    setPriceOverride(String(rows[i]?.price ?? ""));
+  };
+
+  const proceedAdd = (finalPrice, finalQty) => {
+    onAdd(tierKey, { label: rows[rowIndex]?.label, price: finalPrice }, finalQty);
+  };
 
   const confirm = () => {
     const q = parseNum(qty);
@@ -1286,13 +1323,55 @@ function ProductPickerModal({ product, onAdd, onClose }) {
       setError("اكتب عدد صحيح");
       return;
     }
-    onAdd(tierKey, rows[rowIndex] || rows[0], q);
+    const price = parseNum(priceOverride);
+    if (price === null || price < 0) {
+      setError("اكتب سعر صحيح");
+      return;
+    }
+    setError("");
+
+    const invoiceTierPrice = tierBase(product[invoice.tierKey]);
+    const wholesalePrice = tierBase(product.wholesale);
+
+    if (price < wholesalePrice && !invoice.suppressRed) {
+      setWarning({ type: "red", price, q });
+      return;
+    }
+    if (price < invoiceTierPrice && !invoice.suppressYellow) {
+      setWarning({ type: "yellow", price, q });
+      return;
+    }
+    proceedAdd(price, q);
   };
+
+  if (warning) {
+    const isRed = warning.type === "red";
+    return (
+      <Modal title={isRed ? "⚠️ أقل من سعر الجملة!" : "⚠️ أقل من السعر المحدد للفاتورة"} accent={isRed ? "#EF4444" : "#FBBF24"} onClose={() => setWarning(null)}>
+        <p className="text-sm text-[#D4D4D8] mb-4">
+          السعر اللي كتبته (<span className="font-bold tabular-nums">{warning.price}</span>) أقل من {isRed ? "سعر الجملة" : "السعر المحدد لنوع الفاتورة دي"}. تحب تكمل البيع بيه؟
+        </p>
+        <div className="flex gap-2 mb-3">
+          <button onClick={() => proceedAdd(warning.price, warning.q)} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">أكمل البيع</button>
+          <button onClick={() => setWarning(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">رجوع</button>
+        </div>
+        <button
+          onClick={() => {
+            onSuppressWarning(isRed ? "red" : "yellow");
+            proceedAdd(warning.price, warning.q);
+          }}
+          className="w-full text-xs text-[#9A9EA6] hover:underline"
+        >
+          عدم التحذير تاني في الفاتورة دي
+        </button>
+      </Modal>
+    );
+  }
 
   return (
     <Modal title={product.name} accent="#10B981" onClose={onClose}>
       <div className="grid grid-cols-3 gap-2 mb-3">
-        {TIERS.map((t) => (
+        {CASHIER_TIERS.map((t) => (
           <button
             key={t.key}
             onClick={() => setTierKey(t.key)}
@@ -1304,12 +1383,12 @@ function ProductPickerModal({ product, onAdd, onClose }) {
         ))}
       </div>
 
-      {rows.length > 1 ? (
+      {rows.length > 1 && (
         <div className="space-y-1.5 mb-3">
           {rows.map((r, i) => (
             <button
               key={i}
-              onClick={() => setRowIndex(i)}
+              onClick={() => pickRow(i)}
               className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-xs ${rowIndex === i ? "toggle-pill active-sky" : "field-input"}`}
             >
               <span>{r.label || "السعر الأساسي"}</span>
@@ -1317,9 +1396,10 @@ function ProductPickerModal({ product, onAdd, onClose }) {
             </button>
           ))}
         </div>
-      ) : (
-        <p className="text-center text-lg font-bold text-white mb-3">{rows[0]?.price}</p>
       )}
+
+      <p className="text-xs text-[#9A9EA6] mb-1.5">السعر (تقدر تغيّره)</p>
+      <input value={priceOverride} onChange={(e) => setPriceOverride(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
 
       <p className="text-xs text-[#9A9EA6] mb-1.5">الكمية</p>
       <input value={qty} onChange={(e) => setQty(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
@@ -1329,20 +1409,48 @@ function ProductPickerModal({ product, onAdd, onClose }) {
   );
 }
 
+function makeEmptyInvoice(tierKey, label) {
+  return { id: uid(), label, tierKey, items: [], suppressYellow: false, suppressRed: false };
+}
+
 function CashierScreen({ user, products, productsLoading, setSales, setView }) {
+  const [invoices, setInvoices] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [showNewInvoicePicker, setShowNewInvoicePicker] = useState(false);
+  const invoiceCounterRef = React.useRef(0);
+
   const [query, setQuery] = useState("");
   const [scanning, setScanning] = useState(false);
-  const [cart, setCart] = useState([]);
+  const [pickerViaScan, setPickerViaScan] = useState(false);
   const [pickerProduct, setPickerProduct] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [confirmForm, setConfirmForm] = useState(EMPTY_CONFIRM_FORM);
   const [confirmError, setConfirmError] = useState("");
   const [lastSale, setLastSale] = useState(null);
+  const [notFoundToast, setNotFoundToast] = useState(false);
+
+  const activeInvoice = invoices.find((inv) => inv.id === activeId) || null;
+  const TIER_LABELS = { retail: "قطاعي", half: "نص جملة", wholesale: "جملة" };
 
   const normalizedQuery = normalizeArabic(query);
   const results = normalizedQuery ? products.filter((p) => normalizeArabic(p.name).includes(normalizedQuery)).slice(0, 12) : [];
-  const total = cart.reduce((s, it) => s + it.lineTotal, 0);
-  const TIER_LABELS = { retail: "قطاعي", half: "نص جملة", wholesale: "جملة" };
+  const total = activeInvoice ? activeInvoice.items.reduce((s, it) => s + it.lineTotal, 0) : 0;
+
+  const createInvoice = (tierKey) => {
+    invoiceCounterRef.current += 1;
+    const inv = makeEmptyInvoice(tierKey, `فاتورة ${invoiceCounterRef.current}`);
+    setInvoices((list) => [...list, inv]);
+    setActiveId(inv.id);
+    setShowNewInvoicePicker(false);
+  };
+
+  const updateActiveInvoice = (patch) => {
+    setInvoices((list) => list.map((inv) => (inv.id === activeId ? { ...inv, ...patch } : inv)));
+  };
+
+  const handleSuppressWarning = (type) => {
+    updateActiveInvoice(type === "red" ? { suppressRed: true } : { suppressYellow: true });
+  };
 
   const addToCart = (tierKey, row, qty) => {
     const item = {
@@ -1354,17 +1462,29 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
       qty,
       lineTotal: row.price * qty,
     };
-    setCart((c) => [...c, item]);
+    updateActiveInvoice({ items: [...(activeInvoice?.items || []), item] });
     setPickerProduct(null);
     setQuery("");
+    if (pickerViaScan) {
+      setPickerViaScan(false);
+      setScanning(true);
+    }
   };
 
-  const removeFromCart = (id) => setCart((c) => c.filter((it) => it.id !== id));
+  const removeFromCart = (id) => {
+    updateActiveInvoice({ items: activeInvoice.items.filter((it) => it.id !== id) });
+  };
 
   const handleScanResult = (code) => {
     setScanning(false);
     const match = products.find((p) => (p.barcodes && p.barcodes.includes(code)) || p.barcode === code);
-    if (match) setPickerProduct(match);
+    if (match) {
+      setPickerViaScan(true);
+      setPickerProduct(match);
+    } else {
+      setNotFoundToast(true);
+      setTimeout(() => setNotFoundToast(false), 2500);
+    }
   };
 
   const completeSale = () => {
@@ -1377,7 +1497,7 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
     const sale = {
       id: uid(),
       employeeName: user.name,
-      items: cart.map((it) => ({ productName: it.productName, tierLabel: it.tierLabel, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
+      items: activeInvoice.items.map((it) => ({ productName: it.productName, tierLabel: it.tierLabel, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
       total,
       paid: true,
       paymentMethod: confirmForm.paymentMethod,
@@ -1389,10 +1509,14 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
     setSales((s) => [...s, sale]);
     salesStore.upsert(sale);
     setLastSale(sale);
-    setCart([]);
+    const closedId = activeId;
+    const remaining = invoices.filter((inv) => inv.id !== closedId);
+    setInvoices(remaining);
+    setActiveId(remaining.length ? remaining[0].id : null);
     setShowCheckout(false);
     setConfirmForm(EMPTY_CONFIRM_FORM);
     setConfirmError("");
+    setQuery("");
   };
 
   return (
@@ -1405,56 +1529,97 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
           </div>
         )}
 
-        <div className="flex gap-2 mb-3">
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن منتج تضيفه..." className="field-input flex-1 rounded-xl px-4 py-2.5 text-sm" />
-          <button onClick={() => setScanning(true)} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
-        </div>
-
-        {results.length > 0 && (
-          <div className="space-y-2 mb-4">
-            {results.map((p) => (
-              <button key={p.id} onClick={() => setPickerProduct(p)} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
-                <span className="font-bold text-sm text-white">{p.name}</span>
-                <Icon name="Plus" size={16} className="text-emerald-400" />
-              </button>
-            ))}
-          </div>
-        )}
-
-        <h3 className="font-bold text-sm text-white mb-2">السلة</h3>
-        {cart.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
-        <div className="space-y-2 mb-4">
-          {cart.map((it) => (
-            <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between">
-              <div>
-                <p className="font-bold text-sm text-white">{it.productName}</p>
-                <p className="text-xs text-[#9A9EA6]">{it.tierLabel}{it.priceNote ? ` · ${it.priceNote}` : ""} × {it.qty}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
-                <button onClick={() => removeFromCart(it.id)} className="text-rose-400"><Icon name="X" size={16} /></button>
-              </div>
-            </div>
+        <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
+          {invoices.map((inv) => (
+            <button
+              key={inv.id}
+              onClick={() => setActiveId(inv.id)}
+              className={`shrink-0 rounded-xl px-3 py-2 text-xs font-bold ${activeId === inv.id ? "btn-sky" : "btn-ghost"}`}
+            >
+              {inv.label}
+            </button>
           ))}
+          <button onClick={() => setShowNewInvoicePicker(true)} className="shrink-0 icon-btn rounded-xl px-3 py-2 flex items-center gap-1">
+            <Icon name="Plus" size={15} /> فاتورة جديدة
+          </button>
         </div>
 
-        {cart.length > 0 && (
-          <div className="panel rounded-2xl p-4 flex items-center justify-between mb-4">
-            <span className="text-sm text-[#9A9EA6]">الإجمالي</span>
-            <span className="font-bold text-xl text-sky-400 tabular-nums">{total}</span>
-          </div>
+        {!activeInvoice && (
+          <p className="text-center text-[#6B7078] py-10 text-sm">افتح فاتورة جديدة عشان تبدأ البيع</p>
         )}
 
-        <button
-          disabled={cart.length === 0}
-          onClick={() => setShowCheckout(true)}
-          className="btn-emerald w-full rounded-xl py-3 font-bold flex items-center justify-center gap-2 disabled:opacity-40"
-        >
-          <Icon name="CheckCircle2" size={18} /> إتمام البيع
-        </button>
+        {activeInvoice && (
+          <>
+            <div className="flex gap-2 mb-3">
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن منتج تضيفه..." className="field-input flex-1 rounded-xl px-4 py-2.5 text-sm" />
+              <button onClick={() => { setPickerViaScan(true); setScanning(true); }} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
+            </div>
 
-        {pickerProduct && <ProductPickerModal product={pickerProduct} onAdd={addToCart} onClose={() => setPickerProduct(null)} />}
-        {scanning && <BarcodeScannerModal onDetected={handleScanResult} onClose={() => setScanning(false)} />}
+            {results.length > 0 && (
+              <div className="space-y-2 mb-4">
+                {results.map((p) => (
+                  <button key={p.id} onClick={() => { setPickerViaScan(false); setPickerProduct(p); }} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
+                    <span className="font-bold text-sm text-white">{p.name}</span>
+                    <Icon name="Plus" size={16} className="text-emerald-400" />
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <h3 className="font-bold text-sm text-white mb-2">السلة</h3>
+            {activeInvoice.items.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
+            <div className="space-y-2 mb-4">
+              {activeInvoice.items.map((it) => (
+                <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-sm text-white">{it.productName}</p>
+                    <p className="text-xs text-[#9A9EA6]">{it.tierLabel}{it.priceNote ? ` · ${it.priceNote}` : ""} × {it.qty}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
+                    <button onClick={() => removeFromCart(it.id)} className="text-rose-400"><Icon name="X" size={16} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {activeInvoice.items.length > 0 && (
+              <div className="panel rounded-2xl p-4 flex items-center justify-between mb-4">
+                <span className="text-sm text-[#9A9EA6]">الإجمالي</span>
+                <span className="font-bold text-xl text-sky-400 tabular-nums">{total}</span>
+              </div>
+            )}
+
+            <button
+              disabled={activeInvoice.items.length === 0}
+              onClick={() => setShowCheckout(true)}
+              className="btn-emerald w-full rounded-xl py-3 font-bold flex items-center justify-center gap-2 disabled:opacity-40"
+            >
+              <Icon name="CheckCircle2" size={18} /> إتمام البيع
+            </button>
+          </>
+        )}
+
+        {showNewInvoicePicker && <NewInvoiceTierModal onSelect={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />}
+
+        {pickerProduct && activeInvoice && (
+          <ProductPickerModal
+            product={pickerProduct}
+            invoice={activeInvoice}
+            onAdd={addToCart}
+            onSuppressWarning={handleSuppressWarning}
+            onClose={() => { setPickerProduct(null); setPickerViaScan(false); }}
+          />
+        )}
+        {scanning && <BarcodeScannerModal onDetected={handleScanResult} onClose={() => { setScanning(false); setPickerViaScan(false); }} />}
+
+        {notFoundToast && (
+          <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+            <div className="bg-rose-950/90 border border-rose-800 rounded-xl px-4 py-2 toast-in text-xs text-rose-300 font-bold">
+              مفيش منتج بالباركود ده
+            </div>
+          </div>
+        )}
 
         {showCheckout && (
           <Modal title="إتمام البيع" accent="#10B981" onClose={() => setShowCheckout(false)}>
@@ -1583,6 +1748,9 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
     showToast("تم إبلاغ الأدمن بالمنتج المطلوب");
   };
 
+  const [notFoundBarcode, setNotFoundBarcode] = useState(null);
+  const [continueScanAfterAdd, setContinueScanAfterAdd] = useState(false);
+
   const handleScanResult = (code) => {
     if (scannerTarget.mode === "new") {
       setNewProd((v) => {
@@ -1602,10 +1770,17 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
         setQuery(match.name);
         showToast(`لقينا: ${match.name}`);
       } else {
-        showToast("مفيش منتج بالباركود ده");
+        setNotFoundBarcode(code);
       }
     }
     setScannerTarget(null);
+  };
+
+  const addProductFromNotFoundBarcode = () => {
+    setNewProd({ ...makeEmptyNewProduct(), barcodes: [notFoundBarcode] });
+    setContinueScanAfterAdd(true);
+    setShowAdd(true);
+    setNotFoundBarcode(null);
   };
 
   const handleRefresh = async () => {
@@ -1770,6 +1945,10 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
     setAddError("");
     setDuplicateMatch(null);
     setShowAdd(false);
+    if (continueScanAfterAdd) {
+      setContinueScanAfterAdd(false);
+      setScannerTarget({ mode: "lookup" });
+    }
   };
 
   const { msg: reportMsg, count: reportCount } = buildWhatsAppMessage(changedToday, products);
@@ -2054,6 +2233,18 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
         )}
 
         {scannerTarget && <BarcodeScannerModal onDetected={handleScanResult} onClose={() => setScannerTarget(null)} />}
+
+        {notFoundBarcode && (
+          <Modal title="مفيش منتج بالباركود ده" accent="#FBBF24" onClose={() => setNotFoundBarcode(null)}>
+            <p className="text-sm text-[#D4D4D8] mb-4">
+              الباركود <span className="font-bold text-white">{notFoundBarcode}</span> مش متسجل لأي منتج. تحب تضيفه كمنتج جديد بالباركود ده؟
+            </p>
+            <div className="flex gap-2">
+              <button onClick={addProductFromNotFoundBarcode} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">إضافة منتج</button>
+              <button onClick={() => setNotFoundBarcode(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
+            </div>
+          </Modal>
+        )}
 
         {showClearConfirm && (
           <Modal title="📋 تم فتح واتساب" accent="#25D366" onClose={() => setShowClearConfirm(false)}>
