@@ -1,6 +1,6 @@
 {
-  "name": "العوادلي",
-  "short_name": "العوادلي",
+  "name": "FaAroon",
+  "short_name": "FaAroon",
   "description": "نظام إدارة أسعار ومبيعات المحل",
   "start_url": "./index.html",
   "scope": "./",

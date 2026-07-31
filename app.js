@@ -421,7 +421,7 @@ function formatArabicDate() {
 
 function buildWhatsAppMessage(changedToday, products) {
   const entries = changedToday.map((c) => products.find((p) => p.id === c.id)).filter(Boolean);
-  let msg = `📊 *تقرير تعديلات الأسعار - العوادلي*\n📅 ${formatArabicDate()}\n\n`;
+  let msg = `📊 *تقرير تعديلات الأسعار - FaAroon*\n📅 ${formatArabicDate()}\n\n`;
   entries.forEach((p, i) => {
     msg += `${i + 1}. *${p.name}*\n   قطاعي: ${tierBase(p.retail)} | نص جملة: ${tierBase(p.half)} | جملة: ${tierBase(p.wholesale)}\n\n`;
   });
@@ -471,7 +471,7 @@ function printOrderReceipt(order) {
 </style>
 </head>
 <body>
-  <h1>العوادلي</h1>
+  <h1>FaAroon</h1>
   <p class="center muted">فاتورة أوردر</p>
   <div class="line"></div>
   <div class="row"><span>المندوب</span><span>${escapeHtml(order.repName)}</span></div>
@@ -518,8 +518,9 @@ function printSaleReceipt(sale) {
 </style>
 </head>
 <body>
-  <h1>العوادلي</h1>
+  <h1>FaAroon</h1>
   <p class="center muted">فاتورة كاشير</p>
+  ${sale.customerName ? `<p class="center muted">الزبون: ${escapeHtml(sale.customerName)}</p>` : ""}
   <div class="line"></div>
   ${itemsHtml}
   <div class="line"></div>
@@ -608,7 +609,7 @@ function LoginScreen({ onLogin, goRegister, error, loading }) {
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-3 shadow-lg header-bar">
             <Icon name="Store" size={30} className="text-white" />
           </div>
-          <h1 className="font-extrabold text-2xl text-sky-400 tracking-wide">العوادلي</h1>
+          <h1 className="font-extrabold text-2xl text-sky-400 tracking-wide">FaAroon</h1>
           <p className="text-sm text-[#9A9EA6] mt-1">نظام إدارة أسعار ومبيعات المحل</p>
         </div>
 
@@ -797,7 +798,7 @@ function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile, onDevReset }
 
   return (
     <div className="shop-root">
-      <Header user={user} onLogout={onLogout} title="محلات العوادلي" onOpenProfile={onOpenProfile} />
+      <Header user={user} onLogout={onLogout} title="محلات FaAroon" onOpenProfile={onOpenProfile} />
 
       <div className="max-w-md mx-auto px-4 py-4 grid grid-cols-2 gap-3 fade-up">
         {items.map((it) => {
@@ -1266,55 +1267,96 @@ function makeEmptyNewProduct() {
 }
 
 // ---------- Cashier ----------
-const CASHIER_TIERS = [
-  { key: "retail", label: "قطاعي", color: "#34D399" },
-  { key: "half", label: "نص جملة", color: "#FBBF24" },
-  { key: "wholesale", label: "جملة", color: "#FB7185" },
-];
+const CASHIER_TIER_COLORS = { retail: "#34D399", half: "#FBBF24", wholesale: "#FB7185" };
+const CASHIER_TIER_ORDER = ["retail", "half", "wholesale"];
 
-function NewInvoiceTierModal({ onSelect, onClose }) {
+// Pulls the first number out of a price-row label (e.g. "من 10 قطع" -> 10) so the
+// right quantity-based price can be picked automatically. No number = base price.
+function parseQtyThreshold(label) {
+  if (!label) return 0;
+  const m = String(label).match(/\d+/);
+  return m ? parseInt(m[0], 10) : 0;
+}
+function pickBestRowForQty(rows, qty) {
+  let best = rows[0];
+  let bestThreshold = -1;
+  rows.forEach((r) => {
+    const t = parseQtyThreshold(r.label);
+    if (qty >= t && t >= bestThreshold) {
+      bestThreshold = t;
+      best = r;
+    }
+  });
+  return best;
+}
+
+function TierColorButton({ tierKey, active, onClick }) {
+  const color = CASHIER_TIER_COLORS[tierKey];
+  return (
+    <button
+      onClick={onClick}
+      className="rounded-xl h-11 border-2 transition-all"
+      style={{ background: active ? color : `${color}22`, borderColor: color }}
+    />
+  );
+}
+
+function NewInvoiceTierModal({ customerNameOptions, onCreate, onClose }) {
+  const [tierKey, setTierKey] = useState(null);
+  const [customerName, setCustomerName] = useState("");
+
   return (
     <Modal title="فاتورة جديدة" accent="#10B981" onClose={onClose}>
-      <p className="text-sm text-[#D4D4D8] mb-3">الزبون ده بيشتري بسعر إيه؟</p>
-      <div className="space-y-2">
-        {CASHIER_TIERS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => onSelect(t.key)}
-            className="w-full rounded-xl py-3 font-bold border"
-            style={{ background: `${t.color}22`, color: t.color, borderColor: t.color }}
-          >
-            {t.label}
-          </button>
+      <p className="text-xs text-[#9A9EA6] mb-1.5">اسم الزبون (اختياري)</p>
+      <input
+        value={customerName}
+        onChange={(e) => setCustomerName(e.target.value)}
+        list="cashier-customer-names"
+        placeholder="اكتب اسم الزبون"
+        className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4"
+      />
+      <datalist id="cashier-customer-names">
+        {customerNameOptions.map((n) => <option key={n} value={n} />)}
+      </datalist>
+
+      <p className="text-xs text-[#9A9EA6] mb-1.5">نوع السعر</p>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        {CASHIER_TIER_ORDER.map((key) => (
+          <TierColorButton key={key} tierKey={key} active={tierKey === key} onClick={() => setTierKey(key)} />
         ))}
       </div>
+      <button
+        disabled={!tierKey}
+        onClick={() => onCreate(tierKey, customerName.trim())}
+        className="btn-emerald w-full rounded-xl py-2.5 font-bold disabled:opacity-40"
+      >
+        بدء الفاتورة
+      </button>
     </Modal>
   );
 }
 
-function ProductPickerModal({ product, invoice, onAdd, onSuppressWarning, onClose }) {
-  const [tierKey, setTierKey] = useState(invoice.tierKey);
-  const rows = tierRows(product[tierKey]);
-  const [rowIndex, setRowIndex] = useState(0);
-  const [qty, setQty] = useState("1");
-  const [priceOverride, setPriceOverride] = useState(String(rows[0]?.price ?? ""));
+// Handles both adding a new cart line and editing an existing one (pass existingItem).
+function ProductPickerModal({ product, invoice, existingItem, onAdd, onUpdate, onSuppressWarning, onClose }) {
+  const [tierKey, setTierKey] = useState(existingItem?.tierKey || invoice.tierKey);
+  const [qty, setQty] = useState(existingItem ? String(existingItem.qty) : "1");
+  const [priceOverridden, setPriceOverridden] = useState(false);
+  const [manualPrice, setManualPrice] = useState(existingItem ? String(existingItem.unitPrice) : "");
   const [error, setError] = useState("");
   const [warning, setWarning] = useState(null);
 
-  useEffect(() => {
-    const newRows = tierRows(product[tierKey]);
-    setRowIndex(0);
-    setPriceOverride(String(newRows[0]?.price ?? ""));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tierKey]);
-
-  const pickRow = (i) => {
-    setRowIndex(i);
-    setPriceOverride(String(rows[i]?.price ?? ""));
-  };
+  const rows = tierRows(product[tierKey]);
+  const qtyNum = parseNum(qty) || 1;
+  const autoRow = pickBestRowForQty(rows, qtyNum);
+  const displayPrice = priceOverridden ? manualPrice : String(autoRow?.price ?? "");
 
   const proceedAdd = (finalPrice, finalQty) => {
-    onAdd(tierKey, { label: rows[rowIndex]?.label, price: finalPrice }, finalQty);
+    const payload = { productId: product.id, productName: product.name, tierKey, priceNote: autoRow?.label, unitPrice: finalPrice, qty: finalQty, lineTotal: finalPrice * finalQty };
+    if (existingItem) {
+      onUpdate(existingItem.id, payload);
+    } else {
+      onAdd(payload);
+    }
   };
 
   const confirm = () => {
@@ -1323,7 +1365,7 @@ function ProductPickerModal({ product, invoice, onAdd, onSuppressWarning, onClos
       setError("اكتب عدد صحيح");
       return;
     }
-    const price = parseNum(priceOverride);
+    const price = parseNum(displayPrice);
     if (price === null || price < 0) {
       setError("اكتب سعر صحيح");
       return;
@@ -1349,17 +1391,14 @@ function ProductPickerModal({ product, invoice, onAdd, onSuppressWarning, onClos
     return (
       <Modal title={isRed ? "⚠️ أقل من سعر الجملة!" : "⚠️ أقل من السعر المحدد للفاتورة"} accent={isRed ? "#EF4444" : "#FBBF24"} onClose={() => setWarning(null)}>
         <p className="text-sm text-[#D4D4D8] mb-4">
-          السعر اللي كتبته (<span className="font-bold tabular-nums">{warning.price}</span>) أقل من {isRed ? "سعر الجملة" : "السعر المحدد لنوع الفاتورة دي"}. تحب تكمل البيع بيه؟
+          السعر اللي كتبته (<span className="font-bold tabular-nums">{warning.price}</span>) أقل من {isRed ? "سعر الجملة" : "السعر المحدد لنوع الفاتورة دي"}. تحب تكمل بيه؟
         </p>
         <div className="flex gap-2 mb-3">
           <button onClick={() => proceedAdd(warning.price, warning.q)} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">أكمل البيع</button>
           <button onClick={() => setWarning(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">رجوع</button>
         </div>
         <button
-          onClick={() => {
-            onSuppressWarning(isRed ? "red" : "yellow");
-            proceedAdd(warning.price, warning.q);
-          }}
+          onClick={() => { onSuppressWarning(isRed ? "red" : "yellow"); proceedAdd(warning.price, warning.q); }}
           className="w-full text-xs text-[#9A9EA6] hover:underline"
         >
           عدم التحذير تاني في الفاتورة دي
@@ -1370,50 +1409,38 @@ function ProductPickerModal({ product, invoice, onAdd, onSuppressWarning, onClos
 
   return (
     <Modal title={product.name} accent="#10B981" onClose={onClose}>
-      <div className="grid grid-cols-3 gap-2 mb-3">
-        {CASHIER_TIERS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTierKey(t.key)}
-            className="toggle-pill rounded-xl py-2 text-xs font-bold"
-            style={tierKey === t.key ? { background: `${t.color}33`, color: t.color, borderColor: t.color } : {}}
-          >
-            {t.label}
-          </button>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        {CASHIER_TIER_ORDER.map((key) => (
+          <TierColorButton key={key} tierKey={key} active={tierKey === key} onClick={() => { setTierKey(key); setPriceOverridden(false); }} />
         ))}
       </div>
 
-      {rows.length > 1 && (
-        <div className="space-y-1.5 mb-3">
-          {rows.map((r, i) => (
-            <button
-              key={i}
-              onClick={() => pickRow(i)}
-              className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-xs ${rowIndex === i ? "toggle-pill active-sky" : "field-input"}`}
-            >
-              <span>{r.label || "السعر الأساسي"}</span>
-              <span className="font-bold">{r.price}</span>
-            </button>
-          ))}
-        </div>
+      <p className="text-xs text-[#9A9EA6] mb-1.5">الكمية</p>
+      <input value={qty} onChange={(e) => setQty(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4 text-center" />
+
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs text-[#9A9EA6]">السعر</span>
+        {!priceOverridden && (
+          <button onClick={() => { setManualPrice(displayPrice); setPriceOverridden(true); }} className="text-[11px] text-sky-400 font-semibold">تغيير</button>
+        )}
+      </div>
+      {priceOverridden ? (
+        <input value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
+      ) : (
+        <p className="text-center text-lg font-bold text-white mb-3 tabular-nums">{displayPrice}</p>
       )}
 
-      <p className="text-xs text-[#9A9EA6] mb-1.5">السعر (تقدر تغيّره)</p>
-      <input value={priceOverride} onChange={(e) => setPriceOverride(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
-
-      <p className="text-xs text-[#9A9EA6] mb-1.5">الكمية</p>
-      <input value={qty} onChange={(e) => setQty(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
-      <button onClick={confirm} className="btn-emerald w-full rounded-xl py-2.5 font-bold">إضافة للسلة</button>
+      <button onClick={confirm} className="btn-emerald w-full rounded-xl py-2.5 font-bold">{existingItem ? "حفظ التعديل" : "إضافة للسلة"}</button>
     </Modal>
   );
 }
 
-function makeEmptyInvoice(tierKey, label) {
-  return { id: uid(), label, tierKey, items: [], suppressYellow: false, suppressRed: false };
+function makeEmptyInvoice(tierKey, label, customerName) {
+  return { id: uid(), label, tierKey, customerName: customerName || "", items: [], suppressYellow: false, suppressRed: false };
 }
 
-function CashierScreen({ user, products, productsLoading, setSales, setView }) {
+function CashierScreen({ user, products, productsLoading, sales, setSales, setView }) {
   const [invoices, setInvoices] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [showNewInvoicePicker, setShowNewInvoicePicker] = useState(false);
@@ -1423,22 +1450,25 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
   const [scanning, setScanning] = useState(false);
   const [pickerViaScan, setPickerViaScan] = useState(false);
   const [pickerProduct, setPickerProduct] = useState(null);
+  const [editingItem, setEditingItem] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [confirmForm, setConfirmForm] = useState(EMPTY_CONFIRM_FORM);
   const [confirmError, setConfirmError] = useState("");
   const [lastSale, setLastSale] = useState(null);
   const [notFoundToast, setNotFoundToast] = useState(false);
+  const [mergePrompt, setMergePrompt] = useState(null);
+  const [priceDiffToast, setPriceDiffToast] = useState("");
 
   const activeInvoice = invoices.find((inv) => inv.id === activeId) || null;
-  const TIER_LABELS = { retail: "قطاعي", half: "نص جملة", wholesale: "جملة" };
+  const customerNameOptions = [...new Set(sales.map((s) => s.customerName).filter(Boolean))];
 
   const normalizedQuery = normalizeArabic(query);
   const results = normalizedQuery ? products.filter((p) => normalizeArabic(p.name).includes(normalizedQuery)).slice(0, 12) : [];
   const total = activeInvoice ? activeInvoice.items.reduce((s, it) => s + it.lineTotal, 0) : 0;
 
-  const createInvoice = (tierKey) => {
+  const createInvoice = (tierKey, customerName) => {
     invoiceCounterRef.current += 1;
-    const inv = makeEmptyInvoice(tierKey, `فاتورة ${invoiceCounterRef.current}`);
+    const inv = makeEmptyInvoice(tierKey, `فاتورة ${invoiceCounterRef.current}`, customerName);
     setInvoices((list) => [...list, inv]);
     setActiveId(inv.id);
     setShowNewInvoicePicker(false);
@@ -1452,23 +1482,56 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
     updateActiveInvoice(type === "red" ? { suppressRed: true } : { suppressYellow: true });
   };
 
-  const addToCart = (tierKey, row, qty) => {
-    const item = {
-      id: uid(),
-      productName: pickerProduct.name,
-      tierLabel: TIER_LABELS[tierKey],
-      priceNote: row.label,
-      unitPrice: row.price,
-      qty,
-      lineTotal: row.price * qty,
-    };
-    updateActiveInvoice({ items: [...(activeInvoice?.items || []), item] });
+  const finishAddOrScan = () => {
     setPickerProduct(null);
     setQuery("");
     if (pickerViaScan) {
       setPickerViaScan(false);
       setScanning(true);
     }
+  };
+
+  const commitNewItem = (payload) => {
+    updateActiveInvoice({ items: [...activeInvoice.items, { id: uid(), ...payload }] });
+    finishAddOrScan();
+  };
+
+  const addToCart = (payload) => {
+    const existingIndex = activeInvoice.items.findIndex((it) => it.productId === payload.productId);
+    if (existingIndex === -1) {
+      commitNewItem(payload);
+      return;
+    }
+    const existing = activeInvoice.items[existingIndex];
+    if (existing.unitPrice === payload.unitPrice) {
+      setMergePrompt({ existingItem: existing, payload });
+    } else {
+      setPriceDiffToast(`تنبيه: "${payload.productName}" متسجل قبل كده بسعر مختلف، اتسجل كمنتج منفصل`);
+      setTimeout(() => setPriceDiffToast(""), 3000);
+      commitNewItem(payload);
+    }
+  };
+
+  const confirmMerge = () => {
+    const { existingItem: ex, payload } = mergePrompt;
+    const newQty = ex.qty + payload.qty;
+    updateActiveInvoice({
+      items: activeInvoice.items.map((it) => (it.id === ex.id ? { ...it, qty: newQty, lineTotal: it.unitPrice * newQty } : it)),
+    });
+    setMergePrompt(null);
+    finishAddOrScan();
+  };
+
+  const cancelMerge = () => {
+    setMergePrompt(null);
+    finishAddOrScan();
+  };
+
+  const updateCartItem = (itemId, payload) => {
+    updateActiveInvoice({
+      items: activeInvoice.items.map((it) => (it.id === itemId ? { ...it, ...payload } : it)),
+    });
+    setEditingItem(null);
   };
 
   const removeFromCart = (id) => {
@@ -1497,7 +1560,8 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
     const sale = {
       id: uid(),
       employeeName: user.name,
-      items: activeInvoice.items.map((it) => ({ productName: it.productName, tierLabel: it.tierLabel, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
+      customerName: activeInvoice.customerName || null,
+      items: activeInvoice.items.map((it) => ({ productName: it.productName, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
       total,
       paid: true,
       paymentMethod: confirmForm.paymentMethod,
@@ -1550,6 +1614,17 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
 
         {activeInvoice && (
           <>
+            <input
+              value={activeInvoice.customerName}
+              onChange={(e) => updateActiveInvoice({ customerName: e.target.value })}
+              list="cashier-customer-names-active"
+              placeholder="اسم الزبون (اختياري)"
+              className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3"
+            />
+            <datalist id="cashier-customer-names-active">
+              {customerNameOptions.map((n) => <option key={n} value={n} />)}
+            </datalist>
+
             <div className="flex gap-2 mb-3">
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن منتج تضيفه..." className="field-input flex-1 rounded-xl px-4 py-2.5 text-sm" />
               <button onClick={() => { setPickerViaScan(true); setScanning(true); }} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
@@ -1571,10 +1646,10 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
             <div className="space-y-2 mb-4">
               {activeInvoice.items.map((it) => (
                 <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between">
-                  <div>
+                  <button onClick={() => setEditingItem(it)} className="text-right flex-1">
                     <p className="font-bold text-sm text-white">{it.productName}</p>
-                    <p className="text-xs text-[#9A9EA6]">{it.tierLabel}{it.priceNote ? ` · ${it.priceNote}` : ""} × {it.qty}</p>
-                  </div>
+                    <p className="text-xs text-[#9A9EA6]">× {it.qty}</p>
+                  </button>
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
                     <button onClick={() => removeFromCart(it.id)} className="text-rose-400"><Icon name="X" size={16} /></button>
@@ -1600,9 +1675,11 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
           </>
         )}
 
-        {showNewInvoicePicker && <NewInvoiceTierModal onSelect={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />}
+        {showNewInvoicePicker && (
+          <NewInvoiceTierModal customerNameOptions={customerNameOptions} onCreate={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />
+        )}
 
-        {pickerProduct && activeInvoice && (
+        {pickerProduct && activeInvoice && !mergePrompt && (
           <ProductPickerModal
             product={pickerProduct}
             invoice={activeInvoice}
@@ -1611,12 +1688,43 @@ function CashierScreen({ user, products, productsLoading, setSales, setView }) {
             onClose={() => { setPickerProduct(null); setPickerViaScan(false); }}
           />
         )}
+
+        {editingItem && activeInvoice && (
+          <ProductPickerModal
+            product={products.find((p) => p.id === editingItem.productId) || { name: editingItem.productName, retail: [], half: [], wholesale: [] }}
+            invoice={activeInvoice}
+            existingItem={editingItem}
+            onUpdate={updateCartItem}
+            onSuppressWarning={handleSuppressWarning}
+            onClose={() => setEditingItem(null)}
+          />
+        )}
+
         {scanning && <BarcodeScannerModal onDetected={handleScanResult} onClose={() => { setScanning(false); setPickerViaScan(false); }} />}
+
+        {mergePrompt && (
+          <Modal title="المنتج ده متسجل بالفعل" accent="#0EA5E9" onClose={cancelMerge}>
+            <p className="text-sm text-[#D4D4D8] mb-4">
+              "{mergePrompt.payload.productName}" موجود بالفعل في الفاتورة دي بنفس السعر (الكمية الحالية: {mergePrompt.existingItem.qty}). عايز تزوّد الكمية عليه؟
+            </p>
+            <div className="flex gap-2">
+              <button onClick={confirmMerge} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">أيوه، زوّد الكمية</button>
+              <button onClick={cancelMerge} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">لأ</button>
+            </div>
+          </Modal>
+        )}
 
         {notFoundToast && (
           <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
             <div className="bg-rose-950/90 border border-rose-800 rounded-xl px-4 py-2 toast-in text-xs text-rose-300 font-bold">
               مفيش منتج بالباركود ده
+            </div>
+          </div>
+        )}
+        {priceDiffToast && (
+          <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+            <div className="bg-amber-950/90 border border-amber-700 rounded-xl px-4 py-2 toast-in text-xs text-amber-300 font-bold text-center">
+              {priceDiffToast}
             </div>
           </div>
         )}
@@ -3251,7 +3359,7 @@ function AdminScreen({ user, users, setUsers, setView }) {
     for (const [name, store] of Object.entries(STORE_BY_COLLECTION)) {
       data[name] = (await store.loadAll()) || [];
     }
-    const payload = { exportedAt: Date.now(), app: "العوادلي", data };
+    const payload = { exportedAt: Date.now(), app: "FaAroon", data };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -3498,7 +3606,7 @@ function App() {
         setReminder(mine);
         remindedDateRef.current = todayKey;
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-          try { new Notification("العوادلي", { body: `عندك ${mine.length} أوردر لسه مدفوعش` }); } catch {}
+          try { new Notification("FaAroon", { body: `عندك ${mine.length} أوردر لسه مدفوعش` }); } catch {}
         }
       }
     };
@@ -3682,7 +3790,7 @@ function App() {
       {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} setView={nav} />}
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
-      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} setSales={setSales} setView={nav} />}
+      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} setView={nav} />}
       {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
