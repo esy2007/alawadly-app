@@ -17,11 +17,15 @@ function Icon({ name, size = 18, className = "", style = {} }) {
 // this works in any environment: the artifact preview, a browser, or later
 // inside the Capacitor/APK webview) ----------
 const FIREBASE_PROJECT_ID = "alawadly-53e7d";
+
 const FIREBASE_API_KEY = "AIzaSyAp8Hbi1AmSovP3lxZ6PkMI2C2KgYdSEEo";
+
 const DEV_RESET_PASSWORD = "awadly-reset-2026";
+
 const FIRESTORE_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 
 let authState = { idToken: null, refreshToken: null, expiresAt: 0 };
+
 let authPromise = null;
 
 async function readErrorDetail(res) {
@@ -98,6 +102,7 @@ function toFirestoreValue(v) {
   if (typeof v === "object") return { mapValue: { fields: toFirestoreFields(v) } };
   return { stringValue: String(v) };
 }
+
 function toFirestoreFields(obj) {
   const fields = {};
   Object.entries(obj).forEach(([k, v]) => {
@@ -106,6 +111,7 @@ function toFirestoreFields(obj) {
   });
   return fields;
 }
+
 function fromFirestoreValue(v) {
   if (!v) return null;
   if ("stringValue" in v) return v.stringValue;
@@ -117,6 +123,7 @@ function fromFirestoreValue(v) {
   if ("mapValue" in v) return fromFirestoreFields(v.mapValue.fields || {});
   return null;
 }
+
 function fromFirestoreFields(fields) {
   const obj = {};
   Object.entries(fields || {}).forEach(([k, v]) => { obj[k] = fromFirestoreValue(v); });
@@ -139,12 +146,15 @@ function getOfflineQueue() {
     return [];
   }
 }
+
 function setOfflineQueueRaw(q) {
   try { localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q)); } catch {}
 }
+
 function notifyQueueChange() {
   try { window.dispatchEvent(new CustomEvent("offline-queue-change", { detail: getOfflineQueue().length })); } catch {}
 }
+
 function queueOfflineOp(collectionName, type, payload) {
   const q = getOfflineQueue();
   const id = type === "remove" ? payload : payload.id;
@@ -225,17 +235,44 @@ function makeCollectionStore(collectionName) {
     },
   };
 }
+
 const usersStore = makeCollectionStore("users_col");
+
 const productsStore = makeCollectionStore("products_col");
+
 const productImagesStore = makeCollectionStore("product_images_col");
+
 const changesStore = makeCollectionStore("changes_col");
+
 const ordersStore = makeCollectionStore("orders_col");
+
 const categoriesStore = makeCollectionStore("categories_col");
+
 const transfersStore = makeCollectionStore("transfers_col");
+
 const stockAlertsStore = makeCollectionStore("stock_alerts_col");
+
 const attendanceStore = makeCollectionStore("attendance_col");
+
 const withdrawalsStore = makeCollectionStore("withdrawals_col");
+
 const salesStore = makeCollectionStore("sales_col");
+
+const settingsStore = makeCollectionStore("settings_col");
+
+const DEFAULT_TIER_SETTINGS = {
+  id: "tier_settings",
+  tiers: [
+    { id: "retail", label: "قطاعي", color: "#34D399", archived: false },
+    { id: "half", label: "نص جملة", color: "#FBBF24", archived: false },
+    { id: "wholesale", label: "جملة", color: "#FB7185", archived: false },
+  ],
+  hideFromCustomer: true,
+};
+
+function activeTiers(tierSettings) {
+  return tierSettings.tiers.filter((t) => !t.archived);
+}
 
 const STORE_BY_COLLECTION = {
   users_col: usersStore,
@@ -249,6 +286,7 @@ const STORE_BY_COLLECTION = {
   attendance_col: attendanceStore,
   withdrawals_col: withdrawalsStore,
   sales_col: salesStore,
+  settings_col: settingsStore,
 };
 
 function todayStr() {
@@ -264,8 +302,8 @@ function businessDayOf(ts) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-
 let syncingOfflineQueue = false;
+
 async function syncOfflineQueue() {
   if (syncingOfflineQueue) return;
   const queue = getOfflineQueue();
@@ -282,7 +320,6 @@ async function syncOfflineQueue() {
   notifyQueueChange();
   syncingOfflineQueue = false;
 }
-
 
 // Fetches only the specific image documents needed (by product id) in one request,
 // instead of loading every product's image up front. This is what keeps opening the
@@ -326,9 +363,11 @@ async function batchGetImages(ids) {
 // once this runs as a real web page or inside the Capacitor/APK build, which is the
 // actual target environment.
 const SESSION_KEY = "alawadly_session";
+
 function saveSession(user) {
   try { localStorage.setItem(SESSION_KEY, JSON.stringify({ id: user.id })); } catch {}
 }
+
 function loadSessionUserId() {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -337,6 +376,7 @@ function loadSessionUserId() {
     return null;
   }
 }
+
 function clearSession() {
   try { localStorage.removeItem(SESSION_KEY); } catch {}
 }
@@ -355,6 +395,7 @@ function normalizeArabic(str) {
     .replace(/ؤ/g, "و")
     .replace(/\s+/g, " ");
 }
+
 const namesMatch = (a, b) => normalizeArabic(a) === normalizeArabic(b);
 
 function parseNum(val) {
@@ -369,13 +410,10 @@ function parseNum(val) {
   return isNaN(n) ? null : n;
 }
 
-function validateTiers(wholesale, half, retail) {
-  if ([wholesale, half, retail].some((v) => v === null)) {
+function validateTierPrices(prices) {
+  if (prices.some((v) => v === null)) {
     return "من فضلك اكتب أرقام صحيحة في كل الأسعار";
   }
-  if (wholesale > half) return "سعر الجملة لازم يكون أقل من أو يساوي سعر نص الجملة";
-  if (half > retail) return "سعر نص الجملة لازم يكون أقل من أو يساوي سعر القطاعي";
-  if (wholesale > retail) return "سعر الجملة لازم يكون أقل من أو يساوي سعر القطاعي";
   return null;
 }
 
@@ -419,11 +457,13 @@ function formatArabicDate() {
   }
 }
 
-function buildWhatsAppMessage(changedToday, products) {
+function buildWhatsAppMessage(changedToday, products, tiers) {
+  const tierList = tiers || DEFAULT_TIER_SETTINGS.tiers;
   const entries = changedToday.map((c) => products.find((p) => p.id === c.id)).filter(Boolean);
   let msg = `📊 *تقرير تعديلات الأسعار - FaAroon*\n📅 ${formatArabicDate()}\n\n`;
   entries.forEach((p, i) => {
-    msg += `${i + 1}. *${p.name}*\n   قطاعي: ${tierBase(p.retail)} | نص جملة: ${tierBase(p.half)} | جملة: ${tierBase(p.wholesale)}\n\n`;
+    const tierText = tierList.map((t) => `${t.label}: ${tierBase(p[t.id])}`).join(" | ");
+    msg += `${i + 1}. *${p.name}*\n   ${tierText}\n\n`;
   });
   msg += `---------------------------------\n📌 تم تحديث الأسعار المذكورة أعلاه في السيستم.`;
   return { msg, count: entries.length };
@@ -556,6 +596,20 @@ const DEFAULT_ADMIN = {
   status: "approved",
   permissions: { manageProducts: true, deleteProducts: true, editPrices: true },
 };
+
+// ---------- Prices screen ----------
+// A tier (قطاعي / نص جملة / جملة) can now hold several price points — e.g. a
+// different price for a bulk quantity — instead of just one number.
+function tierRows(v) {
+  if (Array.isArray(v)) return v.length ? v : [{ label: "", price: 0 }];
+  if (typeof v === "number") return [{ label: "", price: v }];
+  return [{ label: "", price: 0 }];
+}
+
+function tierBase(v) {
+  const rows = tierRows(v);
+  return rows[0] && rows[0].price !== undefined && rows[0].price !== null ? rows[0].price : 0;
+}
 
 // ---------- Small UI atoms ----------
 function TextField({ label, icon, ...props }) {
@@ -772,6 +826,7 @@ function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile, onDevReset }
     { key: "orders", label: "الطلبات", desc: "تسجيل أوردرات جديدة", icon: "Package", enabled: true, accent: "#F59E0B" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
     { key: "attendance", label: "الحضور والسحب", desc: "سجل حضورك وسحوباتك", icon: "Clock", enabled: true, accent: "#0EA5E9" },
+    { key: "settings", label: "الإعدادات", desc: "كلمة السر وتخصيص التطبيق", icon: "Settings", enabled: true, accent: "#6B7280" },
     { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: user.role === "admin", accent: "#0EA5E9" },
     { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: user.role === "admin", accent: "#F43F5E" },
     { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: user.role === "admin", accent: "#F59E0B" },
@@ -838,8 +893,8 @@ function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile, onDevReset }
   );
 }
 
-function DevResetModal({ onClose, onConfirmed }) {
-  const [stage, setStage] = useState("password");
+function DevResetModal({ onClose, onConfirmed, startAtConfirm }) {
+  const [stage, setStage] = useState(startAtConfirm ? "confirm" : "password");
   const [password, setPassword] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [error, setError] = useState("");
@@ -905,19 +960,6 @@ function DevResetModal({ onClose, onConfirmed }) {
       )}
     </Modal>
   );
-}
-
-// ---------- Prices screen ----------
-// A tier (قطاعي / نص جملة / جملة) can now hold several price points — e.g. a
-// different price for a bulk quantity — instead of just one number.
-function tierRows(v) {
-  if (Array.isArray(v)) return v.length ? v : [{ label: "", price: 0 }];
-  if (typeof v === "number") return [{ label: "", price: v }];
-  return [{ label: "", price: 0 }];
-}
-function tierBase(v) {
-  const rows = tierRows(v);
-  return rows[0] && rows[0].price !== undefined && rows[0].price !== null ? rows[0].price : 0;
 }
 
 function TierPriceEditor({ label, color, rows, setRows }) {
@@ -1259,17 +1301,44 @@ function CategoryCombobox({ categories, setCategories, value, onSelect, allowCre
   );
 }
 
-function makeEmptyRow() {
-  return { id: uid(), label: "", price: "" };
+const PAYMENT_METHODS = [
+  { key: "cash", label: "كاش", icon: "Banknote" },
+  { key: "vodafone_cash", label: "فودافون كاش", icon: "Smartphone" },
+  { key: "instapay", label: "انستاباي", icon: "Smartphone" },
+  { key: "split", label: "جزء كاش وجزء تحويل", icon: "Banknote" },
+];
+
+function PaymentMethodPicker({ value, onChange }) {
+  return (
+    <>
+      <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">طريقة الدفع</span>
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        {PAYMENT_METHODS.map((m) => (
+          <button key={m.key} onClick={() => onChange({ ...value, paymentMethod: m.key })} className={`toggle-pill rounded-xl py-2 text-xs font-bold flex items-center justify-center gap-1 ${value.paymentMethod === m.key ? "active-sky" : ""}`}>
+            <Icon name={m.icon} size={13} /> {m.label}
+          </button>
+        ))}
+      </div>
+      {value.paymentMethod === "split" && (
+        <>
+          <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">التحويل عن طريق</span>
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => onChange({ ...value, splitTransferMethod: "vodafone_cash" })} className={`toggle-pill flex-1 rounded-xl py-2 text-xs font-bold ${value.splitTransferMethod === "vodafone_cash" ? "active-sky" : ""}`}>فودافون كاش</button>
+            <button onClick={() => onChange({ ...value, splitTransferMethod: "instapay" })} className={`toggle-pill flex-1 rounded-xl py-2 text-xs font-bold ${value.splitTransferMethod === "instapay" ? "active-sky" : ""}`}>انستاباي</button>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <input value={value.cashAmount} onChange={(e) => onChange({ ...value, cashAmount: e.target.value })} className="field-input rounded-xl px-3 py-2 text-sm text-center" placeholder="المبلغ كاش" />
+            <input value={value.transferAmount} onChange={(e) => onChange({ ...value, transferAmount: e.target.value })} className="field-input rounded-xl px-3 py-2 text-sm text-center" placeholder="المبلغ تحويل" />
+          </div>
+        </>
+      )}
+    </>
+  );
 }
-function makeEmptyNewProduct() {
-  return { name: "", image: null, barcodes: [""], costPrice: "", categoryId: null, retailRows: [makeEmptyRow()], halfRows: [makeEmptyRow()], wholesaleRows: [makeEmptyRow()] };
-}
+
+const EMPTY_CONFIRM_FORM = { paymentMethod: null, splitTransferMethod: null, cashAmount: "", transferAmount: "" };
 
 // ---------- Cashier ----------
-const CASHIER_TIER_COLORS = { retail: "#34D399", half: "#FBBF24", wholesale: "#FB7185" };
-const CASHIER_TIER_ORDER = ["retail", "half", "wholesale"];
-
 // Pulls the first number out of a price-row label (e.g. "من 10 قطع" -> 10) so the
 // right quantity-based price can be picked automatically. No number = base price.
 function parseQtyThreshold(label) {
@@ -1277,6 +1346,7 @@ function parseQtyThreshold(label) {
   const m = String(label).match(/\d+/);
   return m ? parseInt(m[0], 10) : 0;
 }
+
 function pickBestRowForQty(rows, qty) {
   let best = rows[0];
   let bestThreshold = -1;
@@ -1290,18 +1360,19 @@ function pickBestRowForQty(rows, qty) {
   return best;
 }
 
-function TierColorButton({ tierKey, active, onClick }) {
-  const color = CASHIER_TIER_COLORS[tierKey];
+function TierColorButton({ color, active, onClick, label }) {
   return (
     <button
       onClick={onClick}
-      className="rounded-xl h-11 border-2 transition-all"
-      style={{ background: active ? color : `${color}22`, borderColor: color }}
-    />
+      className="rounded-xl h-11 border-2 transition-all flex items-center justify-center text-xs font-bold px-2 flex-1 min-w-[64px]"
+      style={{ background: active ? color : `${color}22`, borderColor: color, color: active ? "#0B0D10" : color }}
+    >
+      {label || ""}
+    </button>
   );
 }
 
-function NewInvoiceTierModal({ customerNameOptions, onCreate, onClose }) {
+function NewInvoiceTierModal({ customerNameOptions, tierSettings, onCreate, onClose }) {
   const [tierKey, setTierKey] = useState(null);
   const [customerName, setCustomerName] = useState("");
 
@@ -1319,10 +1390,15 @@ function NewInvoiceTierModal({ customerNameOptions, onCreate, onClose }) {
         {customerNameOptions.map((n) => <option key={n} value={n} />)}
       </datalist>
 
-      <p className="text-xs text-[#9A9EA6] mb-1.5">نوع السعر</p>
-      <div className="grid grid-cols-3 gap-2 mb-4">
-        {CASHIER_TIER_ORDER.map((key) => (
-          <TierColorButton key={key} tierKey={key} active={tierKey === key} onClick={() => setTierKey(key)} />
+      <div className="flex flex-wrap gap-2 mb-4">
+        {activeTiers(tierSettings).map((tier) => (
+          <TierColorButton
+            key={tier.id}
+            color={tier.color}
+            active={tierKey === tier.id}
+            onClick={() => setTierKey(tier.id)}
+            label={tierSettings.hideFromCustomer ? "" : tier.label}
+          />
         ))}
       </div>
       <button
@@ -1337,7 +1413,7 @@ function NewInvoiceTierModal({ customerNameOptions, onCreate, onClose }) {
 }
 
 // Handles both adding a new cart line and editing an existing one (pass existingItem).
-function ProductPickerModal({ product, invoice, existingItem, onAdd, onUpdate, onSuppressWarning, onClose }) {
+function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAdd, onUpdate, onSuppressWarning, onClose }) {
   const [tierKey, setTierKey] = useState(existingItem?.tierKey || invoice.tierKey);
   const [qty, setQty] = useState(existingItem ? String(existingItem.qty) : "1");
   const [priceOverridden, setPriceOverridden] = useState(false);
@@ -1373,9 +1449,9 @@ function ProductPickerModal({ product, invoice, existingItem, onAdd, onUpdate, o
     setError("");
 
     const invoiceTierPrice = tierBase(product[invoice.tierKey]);
-    const wholesalePrice = tierBase(product.wholesale);
+    const cheapestTierPrice = Math.min(...activeTiers(tierSettings).map((t) => tierBase(product[t.id])));
 
-    if (price < wholesalePrice && !invoice.suppressRed) {
+    if (price < cheapestTierPrice && !invoice.suppressRed) {
       setWarning({ type: "red", price, q });
       return;
     }
@@ -1389,9 +1465,9 @@ function ProductPickerModal({ product, invoice, existingItem, onAdd, onUpdate, o
   if (warning) {
     const isRed = warning.type === "red";
     return (
-      <Modal title={isRed ? "⚠️ أقل من سعر الجملة!" : "⚠️ أقل من السعر المحدد للفاتورة"} accent={isRed ? "#EF4444" : "#FBBF24"} onClose={() => setWarning(null)}>
+      <Modal title={isRed ? "⚠️ أقل من أرخص سعر متاح للمنتج ده!" : "⚠️ أقل من السعر المحدد للفاتورة"} accent={isRed ? "#EF4444" : "#FBBF24"} onClose={() => setWarning(null)}>
         <p className="text-sm text-[#D4D4D8] mb-4">
-          السعر اللي كتبته (<span className="font-bold tabular-nums">{warning.price}</span>) أقل من {isRed ? "سعر الجملة" : "السعر المحدد لنوع الفاتورة دي"}. تحب تكمل بيه؟
+          السعر اللي كتبته (<span className="font-bold tabular-nums">{warning.price}</span>) أقل من {isRed ? "أرخص سعر متاح للمنتج ده" : "السعر المحدد لنوع الفاتورة دي"}. تحب تكمل بيه؟
         </p>
         <div className="flex gap-2 mb-3">
           <button onClick={() => proceedAdd(warning.price, warning.q)} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">أكمل البيع</button>
@@ -1409,9 +1485,15 @@ function ProductPickerModal({ product, invoice, existingItem, onAdd, onUpdate, o
 
   return (
     <Modal title={product.name} accent="#10B981" onClose={onClose}>
-      <div className="grid grid-cols-3 gap-2 mb-4">
-        {CASHIER_TIER_ORDER.map((key) => (
-          <TierColorButton key={key} tierKey={key} active={tierKey === key} onClick={() => { setTierKey(key); setPriceOverridden(false); }} />
+      <div className="flex flex-wrap gap-2 mb-4">
+        {activeTiers(tierSettings).map((tier) => (
+          <TierColorButton
+            key={tier.id}
+            color={tier.color}
+            active={tierKey === tier.id}
+            onClick={() => { setTierKey(tier.id); setPriceOverridden(false); }}
+            label={tierSettings.hideFromCustomer ? "" : tier.label}
+          />
         ))}
       </div>
 
@@ -1440,7 +1522,7 @@ function makeEmptyInvoice(tierKey, label, customerName) {
   return { id: uid(), label, tierKey, customerName: customerName || "", items: [], suppressYellow: false, suppressRed: false };
 }
 
-function CashierScreen({ user, products, productsLoading, sales, setSales, setView }) {
+function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, setView }) {
   const [invoices, setInvoices] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [showNewInvoicePicker, setShowNewInvoicePicker] = useState(false);
@@ -1676,13 +1758,14 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, setVi
         )}
 
         {showNewInvoicePicker && (
-          <NewInvoiceTierModal customerNameOptions={customerNameOptions} onCreate={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />
+          <NewInvoiceTierModal customerNameOptions={customerNameOptions} tierSettings={tierSettings} onCreate={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />
         )}
 
         {pickerProduct && activeInvoice && !mergePrompt && (
           <ProductPickerModal
             product={pickerProduct}
             invoice={activeInvoice}
+            tierSettings={tierSettings}
             onAdd={addToCart}
             onSuppressWarning={handleSuppressWarning}
             onClose={() => { setPickerProduct(null); setPickerViaScan(false); }}
@@ -1691,9 +1774,10 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, setVi
 
         {editingItem && activeInvoice && (
           <ProductPickerModal
-            product={products.find((p) => p.id === editingItem.productId) || { name: editingItem.productName, retail: [], half: [], wholesale: [] }}
+            product={products.find((p) => p.id === editingItem.productId) || { name: editingItem.productName, ...Object.fromEntries(activeTiers(tierSettings).map((t) => [t.id, []])) }}
             invoice={activeInvoice}
             existingItem={editingItem}
+            tierSettings={tierSettings}
             onUpdate={updateCartItem}
             onSuppressWarning={handleSuppressWarning}
             onClose={() => setEditingItem(null)}
@@ -1752,7 +1836,22 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, setVi
   );
 }
 
-function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, setView }) {
+function makeEmptyRow() {
+  return { id: uid(), label: "", price: "" };
+}
+
+function makeEmptyNewProduct(tiers) {
+  return {
+    name: "",
+    image: null,
+    barcodes: [""],
+    costPrice: "",
+    categoryId: null,
+    priceRows: Object.fromEntries(tiers.map((t) => [t.id, [makeEmptyRow()]])),
+  };
+}
+
+function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, tierSettings, setView }) {
   const canEditPrices = user.role === "admin" || !!user.permissions?.editPrices;
   const canManageProducts = user.role === "admin" || !!user.permissions?.manageProducts;
   const canDeleteProducts = user.role === "admin" || !!user.permissions?.deleteProducts;
@@ -1760,7 +1859,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState({});
   const [editError, setEditError] = useState("");
-  const [newProd, setNewProd] = useState(makeEmptyNewProduct);
+  const [newProd, setNewProd] = useState(() => makeEmptyNewProduct(activeTiers(tierSettings)));
   const [addError, setAddError] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [duplicateMatch, setDuplicateMatch] = useState(null);
@@ -1885,7 +1984,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   };
 
   const addProductFromNotFoundBarcode = () => {
-    setNewProd({ ...makeEmptyNewProduct(), barcodes: [notFoundBarcode] });
+    setNewProd({ ...makeEmptyNewProduct(activeTiers(tierSettings)), barcodes: [notFoundBarcode] });
     setContinueScanAfterAdd(true);
     setShowAdd(true);
     setNotFoundBarcode(null);
@@ -1928,7 +2027,8 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
     setEditingId(p.id);
     setEditError("");
     const existingBarcodes = p.barcodes && p.barcodes.length ? p.barcodes : (p.barcode ? [p.barcode] : [""]);
-    setDraft({ retailRows: toEditRows(p.retail), halfRows: toEditRows(p.half), wholesaleRows: toEditRows(p.wholesale), costPrice: p.costPrice ?? "", barcodes: existingBarcodes });
+    const priceRows = Object.fromEntries(activeTiers(tierSettings).map((t) => [t.id, toEditRows(p[t.id])]));
+    setDraft({ priceRows, costPrice: p.costPrice ?? "", barcodes: existingBarcodes });
   };
 
   // Validates a tier's rows (every price must parse), returns an error string or null.
@@ -1947,21 +2047,22 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   };
 
   const saveEdit = (p) => {
-    const rowsErr = validateRows(draft.retailRows) || validateRows(draft.halfRows) || validateRows(draft.wholesaleRows);
-    if (rowsErr) {
-      setEditError(rowsErr);
-      return;
+    for (const tier of activeTiers(tierSettings)) {
+      const rowsErr = validateRows(draft.priceRows[tier.id]);
+      if (rowsErr) {
+        setEditError(rowsErr);
+        return;
+      }
     }
-    const err = validateTiers(parseNum(draft.wholesaleRows[0].price), parseNum(draft.halfRows[0].price), parseNum(draft.retailRows[0].price));
+    const err = validateTierPrices(activeTiers(tierSettings).map((t) => parseNum(draft.priceRows[t.id][0].price)));
     if (err) {
       setEditError(err);
       return;
     }
+    const tierFields = Object.fromEntries(activeTiers(tierSettings).map((t) => [t.id, toStoredRows(draft.priceRows[t.id])]));
     const updated = {
       ...p,
-      retail: toStoredRows(draft.retailRows),
-      half: toStoredRows(draft.halfRows),
-      wholesale: toStoredRows(draft.wholesaleRows),
+      ...tierFields,
       barcodes: cleanBarcodes(draft.barcodes),
       updatedAt: Date.now(),
     };
@@ -2002,9 +2103,11 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
   const validateNewProduct = () => {
     if (!newProd.name.trim()) return "اكتب اسم المنتج";
-    const rowsErr = validateRows(newProd.retailRows) || validateRows(newProd.halfRows) || validateRows(newProd.wholesaleRows);
-    if (rowsErr) return rowsErr;
-    return validateTiers(parseNum(newProd.wholesaleRows[0].price), parseNum(newProd.halfRows[0].price), parseNum(newProd.retailRows[0].price));
+    for (const tier of activeTiers(tierSettings)) {
+      const rowsErr = validateRows(newProd.priceRows[tier.id]);
+      if (rowsErr) return rowsErr;
+    }
+    return validateTierPrices(activeTiers(tierSettings).map((t) => parseNum(newProd.priceRows[t.id][0].price)));
   };
 
   const addProduct = () => {
@@ -2022,15 +2125,13 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   };
 
   const finalizeAddProduct = (overwriteId) => {
-    const retail = toStoredRows(newProd.retailRows);
-    const half = toStoredRows(newProd.halfRows);
-    const wholesale = toStoredRows(newProd.wholesaleRows);
+    const tierFields = Object.fromEntries(activeTiers(tierSettings).map((t) => [t.id, toStoredRows(newProd.priceRows[t.id])]));
     const costPrice = isAdmin && newProd.costPrice !== "" ? parseNum(newProd.costPrice) : null;
 
     if (overwriteId) {
       const existing = products.find((p) => p.id === overwriteId);
       const image = newProd.image || existing.image || null;
-      const updated = { ...existing, name: newProd.name.trim(), retail, half, wholesale, image, barcodes: cleanBarcodes(newProd.barcodes), categoryId: newProd.categoryId, updatedAt: Date.now(), ...(isAdmin ? { costPrice } : {}) };
+      const updated = { ...existing, name: newProd.name.trim(), ...tierFields, image, barcodes: cleanBarcodes(newProd.barcodes), categoryId: newProd.categoryId, updatedAt: Date.now(), ...(isAdmin ? { costPrice } : {}) };
       setProducts(products.map((p) => (p.id === overwriteId ? updated : p)));
       productsStore.upsert(stripImage(updated));
       if (newProd.image) {
@@ -2040,7 +2141,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
       logChange(overwriteId, updated.name);
     } else {
       const newId = uid();
-      const newProduct = { id: newId, name: newProd.name.trim(), retail, half, wholesale, image: newProd.image || null, barcodes: cleanBarcodes(newProd.barcodes), costPrice, categoryId: newProd.categoryId, createdAt: Date.now(), updatedAt: Date.now() };
+      const newProduct = { id: newId, name: newProd.name.trim(), ...tierFields, image: newProd.image || null, barcodes: cleanBarcodes(newProd.barcodes), costPrice, categoryId: newProd.categoryId, createdAt: Date.now(), updatedAt: Date.now() };
       setProducts([...products, newProduct]);
       productsStore.upsert(stripImage(newProduct));
       if (newProd.image) {
@@ -2049,7 +2150,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
       }
       logChange(newId, newProduct.name);
     }
-    setNewProd(makeEmptyNewProduct());
+    setNewProd(makeEmptyNewProduct(activeTiers(tierSettings)));
     setAddError("");
     setDuplicateMatch(null);
     setShowAdd(false);
@@ -2059,7 +2160,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
     }
   };
 
-  const { msg: reportMsg, count: reportCount } = buildWhatsAppMessage(changedToday, products);
+  const { msg: reportMsg, count: reportCount } = buildWhatsAppMessage(changedToday, products, activeTiers(tierSettings));
   const whatsappHref = `https://wa.me/?text=${encodeURIComponent(reportMsg)}`;
 
   const handleSendReportClick = (e) => {
@@ -2168,21 +2269,23 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
                 <div className="pt-2 border-t border-white/5">
                   {editing ? (
                     <div className="space-y-2">
-                      <TierPriceEditor label="قطاعي" color="#34D399" rows={draft.retailRows} setRows={(rows) => setDraft({ ...draft, retailRows: rows })} />
-                      <TierPriceEditor label="نص جملة" color="#FBBF24" rows={draft.halfRows} setRows={(rows) => setDraft({ ...draft, halfRows: rows })} />
-                      <TierPriceEditor label="جملة" color="#FB7185" rows={draft.wholesaleRows} setRows={(rows) => setDraft({ ...draft, wholesaleRows: rows })} />
+                      {activeTiers(tierSettings).map((tier) => (
+                        <TierPriceEditor
+                          key={tier.id}
+                          label={tier.label}
+                          color={tier.color}
+                          rows={draft.priceRows[tier.id]}
+                          setRows={(rows) => setDraft({ ...draft, priceRows: { ...draft.priceRows, [tier.id]: rows } })}
+                        />
+                      ))}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-3 gap-1.5 text-center text-[11px]">
-                      {[
-                        { key: "retail", label: "قطاعي", color: "#34D399" },
-                        { key: "half", label: "نص جملة", color: "#FBBF24" },
-                        { key: "wholesale", label: "جملة", color: "#FB7185" },
-                      ].map((tier) => (
-                        <div key={tier.key} className="price-chip">
+                    <div className="grid gap-1.5 text-center text-[11px]" style={{ gridTemplateColumns: `repeat(${activeTiers(tierSettings).length}, 1fr)` }}>
+                      {activeTiers(tierSettings).map((tier) => (
+                        <div key={tier.id} className="price-chip">
                           <span className="block text-[#9A9EA6] mb-1">{tier.label}</span>
                           <div className="space-y-1">
-                            {tierRows(p[tier.key]).map((r, i) => (
+                            {tierRows(p[tier.id]).map((r, i) => (
                               <div key={i}>
                                 <span className="font-bold tabular-nums" style={{ color: tier.color }}>{r.price}</span>
                                 {(r.label || i > 0) && <div className="text-xs font-bold text-[#D4D4D8] leading-tight mt-0.5">{r.label || "سعر تاني"}</div>}
@@ -2268,9 +2371,15 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
             <BarcodeListEditor barcodes={newProd.barcodes} setBarcodes={(barcodes) => setNewProd({ ...newProd, barcodes })} onScan={(i) => setScannerTarget({ mode: "new", index: i })} />
 
             <div className="space-y-2 mb-3">
-              <TierPriceEditor label="قطاعي" color="#34D399" rows={newProd.retailRows} setRows={(rows) => setNewProd({ ...newProd, retailRows: rows })} />
-              <TierPriceEditor label="نص جملة" color="#FBBF24" rows={newProd.halfRows} setRows={(rows) => setNewProd({ ...newProd, halfRows: rows })} />
-              <TierPriceEditor label="جملة" color="#FB7185" rows={newProd.wholesaleRows} setRows={(rows) => setNewProd({ ...newProd, wholesaleRows: rows })} />
+              {activeTiers(tierSettings).map((tier) => (
+                <TierPriceEditor
+                  key={tier.id}
+                  label={tier.label}
+                  color={tier.color}
+                  rows={newProd.priceRows[tier.id]}
+                  setRows={(rows) => setNewProd({ ...newProd, priceRows: { ...newProd.priceRows, [tier.id]: rows } })}
+                />
+              ))}
             </div>
 
             <div className="mb-3">
@@ -2403,42 +2512,6 @@ function validateOrder(form) {
   return null;
 }
 
-const PAYMENT_METHODS = [
-  { key: "cash", label: "كاش", icon: "Banknote" },
-  { key: "vodafone_cash", label: "فودافون كاش", icon: "Smartphone" },
-  { key: "instapay", label: "انستاباي", icon: "Smartphone" },
-  { key: "split", label: "جزء كاش وجزء تحويل", icon: "Banknote" },
-];
-
-function PaymentMethodPicker({ value, onChange }) {
-  return (
-    <>
-      <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">طريقة الدفع</span>
-      <div className="grid grid-cols-2 gap-2 mb-3">
-        {PAYMENT_METHODS.map((m) => (
-          <button key={m.key} onClick={() => onChange({ ...value, paymentMethod: m.key })} className={`toggle-pill rounded-xl py-2 text-xs font-bold flex items-center justify-center gap-1 ${value.paymentMethod === m.key ? "active-sky" : ""}`}>
-            <Icon name={m.icon} size={13} /> {m.label}
-          </button>
-        ))}
-      </div>
-      {value.paymentMethod === "split" && (
-        <>
-          <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">التحويل عن طريق</span>
-          <div className="flex gap-2 mb-3">
-            <button onClick={() => onChange({ ...value, splitTransferMethod: "vodafone_cash" })} className={`toggle-pill flex-1 rounded-xl py-2 text-xs font-bold ${value.splitTransferMethod === "vodafone_cash" ? "active-sky" : ""}`}>فودافون كاش</button>
-            <button onClick={() => onChange({ ...value, splitTransferMethod: "instapay" })} className={`toggle-pill flex-1 rounded-xl py-2 text-xs font-bold ${value.splitTransferMethod === "instapay" ? "active-sky" : ""}`}>انستاباي</button>
-          </div>
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <input value={value.cashAmount} onChange={(e) => onChange({ ...value, cashAmount: e.target.value })} className="field-input rounded-xl px-3 py-2 text-sm text-center" placeholder="المبلغ كاش" />
-            <input value={value.transferAmount} onChange={(e) => onChange({ ...value, transferAmount: e.target.value })} className="field-input rounded-xl px-3 py-2 text-sm text-center" placeholder="المبلغ تحويل" />
-          </div>
-        </>
-      )}
-    </>
-  );
-}
-
-const EMPTY_CONFIRM_FORM = { paymentMethod: null, splitTransferMethod: null, cashAmount: "", transferAmount: "" };
 const DISPATCH_LOCATIONS = ["السنانية", "المطري"];
 
 function OrdersScreen({ user, orders, setOrders, setView }) {
@@ -3323,6 +3396,175 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
 }
 
 // ---------- Admin screen ----------
+// ---------- Settings ----------
+function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, onDevReset, setView }) {
+  const isAdmin = user.role === "admin";
+
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [pwError, setPwError] = useState("");
+  const [pwSuccess, setPwSuccess] = useState(false);
+
+  const changePassword = () => {
+    if (!newPassword || newPassword.length < 4) {
+      setPwError("كلمة السر لازم تكون ٤ حروف على الأقل");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwError("كلمتا السر مش متطابقتين");
+      return;
+    }
+    const updated = { ...user, password: newPassword };
+    setUsers(users.map((u) => (u.id === user.id ? updated : u)));
+    usersStore.upsert(updated);
+    setPwError("");
+    setPwSuccess(true);
+    setNewPassword("");
+    setConfirmPassword("");
+    setTimeout(() => setPwSuccess(false), 2500);
+  };
+
+  const [devPassword, setDevPassword] = useState("");
+  const [devError, setDevError] = useState("");
+  const [devUnlocked, setDevUnlocked] = useState(false);
+
+  const checkDevPassword = () => {
+    if (devPassword !== DEV_RESET_PASSWORD) {
+      setDevError("كلمة السر غلط");
+      return;
+    }
+    setDevError("");
+    setDevUnlocked(true);
+  };
+
+  const [tiers, setTiers] = useState(tierSettings.tiers);
+  const [hideFromCustomer, setHideFromCustomer] = useState(tierSettings.hideFromCustomer);
+  const [tierSaved, setTierSaved] = useState(false);
+  const [tierError, setTierError] = useState("");
+
+  const TIER_COLOR_CHOICES = ["#34D399", "#FBBF24", "#FB7185", "#60A5FA", "#A78BFA", "#F97316", "#2DD4BF"];
+  const activeList = tiers.filter((t) => !t.archived);
+  const archivedList = tiers.filter((t) => t.archived);
+
+  const updateTier = (id, patch) => {
+    setTiers(tiers.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  };
+
+  const addTier = () => {
+    const usedColors = tiers.map((t) => t.color);
+    const nextColor = TIER_COLOR_CHOICES.find((c) => !usedColors.includes(c)) || "#9A9EA6";
+    setTiers([...tiers, { id: uid(), label: "", color: nextColor, archived: false }]);
+  };
+
+  const archiveTier = (id) => {
+    if (activeList.length <= 1) return;
+    updateTier(id, { archived: true });
+  };
+
+  const restoreTier = (id) => {
+    updateTier(id, { archived: false });
+  };
+
+  const saveTierSettings = () => {
+    if (activeList.some((t) => !t.label.trim())) {
+      setTierError("لازم كل تصنيف يكون له اسم");
+      return;
+    }
+    setTierError("");
+    const updated = { ...tierSettings, tiers, hideFromCustomer };
+    setTierSettings(updated);
+    settingsStore.upsert(updated);
+    setTierSaved(true);
+    setTimeout(() => setTierSaved(false), 2000);
+  };
+
+  return (
+    <div className="shop-root">
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الإعدادات" />
+      <div className="max-w-lg mx-auto px-4 py-2 fade-up space-y-4 pb-6">
+        <section className="panel rounded-2xl p-4">
+          <h2 className="font-bold text-sm text-white mb-3">تغيير كلمة السر</h2>
+          <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="كلمة السر الجديدة" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-2" />
+          <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="تأكيد كلمة السر" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-2" />
+          {pwError && <p className="text-rose-400 text-xs mb-2">{pwError}</p>}
+          {pwSuccess && <p className="text-emerald-400 text-xs mb-2 font-bold">✓ اتغيرت كلمة السر</p>}
+          <button onClick={changePassword} className="btn-sky w-full rounded-xl py-2 text-sm font-bold">حفظ</button>
+        </section>
+
+        <section className="panel rounded-2xl p-4">
+          <h2 className="font-bold text-sm text-white mb-3">دخول المطور</h2>
+          {!devUnlocked ? (
+            <>
+              <input type="password" value={devPassword} onChange={(e) => setDevPassword(e.target.value)} placeholder="كلمة سر المطور" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-2" />
+              {devError && <p className="text-rose-400 text-xs mb-2">{devError}</p>}
+              <button onClick={checkDevPassword} className="btn-ghost w-full rounded-xl py-2 text-sm font-bold">دخول</button>
+            </>
+          ) : (
+            <DevResetModal startAtConfirm onConfirmed={onDevReset} onClose={() => setDevUnlocked(false)} />
+          )}
+        </section>
+
+        {isAdmin && (
+          <section className="panel rounded-2xl p-4">
+            <h2 className="font-bold text-sm text-white mb-3">ميزات إضافية (أدمن فقط)</h2>
+
+            <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات الأسعار (الأسماء والألوان)</p>
+            {activeList.map((tier) => (
+              <div key={tier.id} className="flex items-center gap-2 mb-2">
+                <input
+                  value={tier.label}
+                  onChange={(e) => updateTier(tier.id, { label: e.target.value })}
+                  placeholder="اسم التصنيف"
+                  className="field-input flex-1 rounded-xl px-3 py-2 text-sm"
+                />
+                <input
+                  type="color"
+                  value={tier.color}
+                  onChange={(e) => updateTier(tier.id, { color: e.target.value })}
+                  className="w-11 h-10 rounded-lg border border-white/10 bg-transparent shrink-0"
+                />
+                {activeList.length > 1 && (
+                  <button onClick={() => archiveTier(tier.id)} className="text-rose-400 shrink-0"><Icon name="Trash2" size={16} /></button>
+                )}
+              </div>
+            ))}
+
+            <button onClick={addTier} className="w-full text-xs text-sky-400 font-semibold flex items-center justify-center gap-1 py-2 mb-3">
+              <Icon name="Plus" size={14} /> إضافة تصنيف سعر جديد
+            </button>
+
+            {archivedList.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات محذوفة (تقدر ترجّعها)</p>
+                {archivedList.map((tier) => (
+                  <div key={tier.id} className="flex items-center gap-2 mb-2 opacity-70">
+                    <span className="flex-1 field-input rounded-xl px-3 py-2 text-sm">{tier.label || "(بدون اسم)"}</span>
+                    <span className="w-11 h-10 rounded-lg shrink-0" style={{ background: tier.color }} />
+                    <button onClick={() => restoreTier(tier.id)} className="text-emerald-400 shrink-0"><Icon name="RefreshCw" size={16} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 text-xs text-[#D4D4D8] mb-3">
+              <input type="checkbox" checked={hideFromCustomer} onChange={(e) => setHideFromCustomer(e.target.checked)} />
+              إخفاء أسماء التصنيفات عن الزبون في الكاشير (زراير ملونة بس)
+            </label>
+
+            {tierError && <p className="text-rose-400 text-xs mb-2">{tierError}</p>}
+            {tierSaved && <p className="text-emerald-400 text-xs mb-2 font-bold">✓ اتحفظ</p>}
+            <button onClick={saveTierSettings} className="btn-emerald w-full rounded-xl py-2 text-sm font-bold">حفظ التخصيص</button>
+
+            <p className="text-[11px] text-[#6B7078] mt-3 leading-5">
+              ملحوظة: حذف تصنيف بيخبيه بس من الكاشير وأسعار المحل، وأسعاره القديمة بتفضل متسجلة زي ما هي — ترجّعه في أي وقت من "تصنيفات محذوفة" فوق وهتلاقي أسعاره القديمة رجعت زي ما كانت.
+            </p>
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AdminScreen({ user, users, setUsers, setView }) {
   const pending = users.filter((u) => u.status === "pending");
   const approved = users.filter((u) => u.status === "approved" && u.role !== "admin");
@@ -3505,6 +3747,7 @@ function App() {
   const [attendance, setAttendance] = useState([]);
   const [withdrawals, setWithdrawals] = useState([]);
   const [sales, setSales] = useState([]);
+  const [tierSettings, setTierSettings] = useState(DEFAULT_TIER_SETTINGS);
   const [screen, setScreen] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
   const [pendingStatus, setPendingStatus] = useState("pending");
@@ -3556,6 +3799,25 @@ function App() {
       setAttendance((await attendanceStore.loadAll()) || []);
       setWithdrawals((await withdrawalsStore.loadAll()) || []);
       setSales((await salesStore.loadAll()) || []);
+      const loadedSettings = await settingsStore.loadAll();
+      const savedTierSettings = loadedSettings && loadedSettings.find((s) => s.id === "tier_settings");
+      if (savedTierSettings) {
+        let tiers = savedTierSettings.tiers;
+        if (!tiers && savedTierSettings.labels) {
+          // migrate from the older labels/colors keyed-object format
+          tiers = Object.keys(savedTierSettings.labels).map((id) => ({
+            id,
+            label: savedTierSettings.labels[id],
+            color: (savedTierSettings.colors && savedTierSettings.colors[id]) || "#9A9EA6",
+            archived: false,
+          }));
+        }
+        setTierSettings({
+          ...DEFAULT_TIER_SETTINGS,
+          ...savedTierSettings,
+          tiers: (tiers && tiers.length ? tiers : DEFAULT_TIER_SETTINGS.tiers).map((t) => ({ archived: false, ...t })),
+        });
+      }
 
       // Restore session — works once this is a real web page or the APK.
       // Claude's artifact preview sandbox blocks localStorage, so this won't
@@ -3782,6 +4044,7 @@ function App() {
           setChangedToday={setChangedToday}
           categories={categories}
           setCategories={setCategories}
+          tierSettings={tierSettings}
           setView={nav}
         />
       )}
@@ -3790,7 +4053,8 @@ function App() {
       {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} setView={nav} />}
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
-      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} setView={nav} />}
+      {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} onDevReset={performFullReset} setView={nav} />}
+      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} setView={nav} />}
       {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
