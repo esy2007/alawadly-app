@@ -274,6 +274,86 @@ function activeTiers(tierSettings) {
   return tierSettings.tiers.filter((t) => !t.archived);
 }
 
+const DEFAULT_INVOICE_NUMBER_SETTINGS = {
+  id: "invoice_number_settings",
+  nextNumber: 1,
+  resetFrequency: "never", // "never" | "daily" | "monthly"
+  lastResetKey: null,
+};
+
+function currentResetKey(freq) {
+  const now = new Date();
+  if (freq === "daily") return now.toISOString().slice(0, 10);
+  if (freq === "monthly") return now.toISOString().slice(0, 7);
+  return null;
+}
+
+// Returns { number, updatedSettings } — call this to assign the next invoice
+// number and get back the settings object to persist (handles the periodic
+// reset automatically based on resetFrequency).
+function takeNextInvoiceNumber(settings) {
+  const key = currentResetKey(settings.resetFrequency);
+  const needsReset = settings.resetFrequency !== "never" && key !== settings.lastResetKey;
+  const number = needsReset ? 1 : settings.nextNumber;
+  const updatedSettings = { ...settings, nextNumber: number + 1, lastResetKey: key };
+  return { number, updatedSettings };
+}
+
+// Two devices tapping "فاتورة جديدة" at the exact same moment must never get the
+// same number. A plain read-then-write (like the rest of the app uses) can't
+// guarantee that — so this uses Firestore's built-in optimistic-concurrency
+// precondition instead: the write only succeeds if nobody else changed the
+// document since we read it, and we retry with fresh data if it was beaten.
+async function claimNextInvoiceNumber(fallbackSettings) {
+  const docUrl = `${FIRESTORE_BASE}/settings_col/invoice_number_settings`;
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    let token;
+    try {
+      token = await ensureAuth();
+    } catch (e) {
+      break; // no network/auth — fall through to the offline fallback below
+    }
+
+    let settings = fallbackSettings;
+    let precondition = "currentDocument.exists=false"; // assume the doc doesn't exist yet
+    try {
+      const getRes = await fetch(docUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (getRes.ok) {
+        const doc = await getRes.json();
+        settings = { ...DEFAULT_INVOICE_NUMBER_SETTINGS, ...fromFirestoreFields(doc.fields) };
+        precondition = `currentDocument.updateTime=${encodeURIComponent(doc.updateTime)}`;
+      } else if (getRes.status !== 404) {
+        break; // real error (not just "doesn't exist yet") — fall back below
+      }
+    } catch (e) {
+      break; // offline — fall back below
+    }
+
+    const { number, updatedSettings } = takeNextInvoiceNumber(settings);
+
+    try {
+      const patchRes = await fetch(`${docUrl}?${precondition}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fields: toFirestoreFields(updatedSettings) }),
+      });
+      if (patchRes.ok) {
+        return { number, updatedSettings };
+      }
+      // Someone else claimed a number in between — wait a random beat and retry with fresh data.
+      await new Promise((r) => setTimeout(r, 80 + Math.random() * 160));
+    } catch (e) {
+      break; // offline — fall back below
+    }
+  }
+
+  // Couldn't confirm a safe number online (offline, or lost every race) — hand out
+  // a local-only number so the sale is never blocked. It may collide with another
+  // device's number in the rare case both were offline at once.
+  return takeNextInvoiceNumber(fallbackSettings);
+}
+
 const STORE_BY_COLLECTION = {
   users_col: usersStore,
   products_col: productsStore,
@@ -385,8 +465,8 @@ function clearSession() {
 // navigating away from the Cashier screen or closing the app mid-sale.
 const CASHIER_INVOICES_KEY = "faaroon_cashier_invoices";
 
-function saveCashierInvoices(invoices, counter) {
-  try { localStorage.setItem(CASHIER_INVOICES_KEY, JSON.stringify({ invoices, counter })); } catch {}
+function saveCashierInvoices(invoices) {
+  try { localStorage.setItem(CASHIER_INVOICES_KEY, JSON.stringify({ invoices })); } catch {}
 }
 
 function loadCashierInvoices() {
@@ -576,7 +656,7 @@ function printSaleReceipt(sale) {
 </head>
 <body>
   <h1>FaAroon</h1>
-  <p class="center muted">فاتورة كاشير</p>
+  <p class="center muted">فاتورة كاشير رقم ${sale.invoiceNumber ?? ""}</p>
   ${sale.customerName ? `<p class="center muted">الزبون: ${escapeHtml(sale.customerName)}</p>` : ""}
   <div class="line"></div>
   ${itemsHtml}
@@ -1452,7 +1532,7 @@ function TierColorButton({ color, active, onClick, label }) {
   );
 }
 
-function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSettings, onCreate, onClose }) {
+function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSettings, busy, onCreate, onClose }) {
   const [tierKey, setTierKey] = useState(null);
   const [customerName, setCustomerName] = useState("");
   const [tierAutoPicked, setTierAutoPicked] = useState(false);
@@ -1496,11 +1576,12 @@ function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSetting
         ))}
       </div>
       <button
-        disabled={!tierKey}
+        disabled={!tierKey || busy}
         onClick={() => onCreate(tierKey, customerName.trim())}
-        className="btn-emerald w-full rounded-xl py-2.5 font-bold disabled:opacity-40"
+        className="btn-emerald w-full rounded-xl py-2.5 font-bold disabled:opacity-40 flex items-center justify-center gap-2"
       >
-        بدء الفاتورة
+        {busy && <Icon name="Loader2" size={16} className="animate-spin" />}
+        {busy ? "بيحجز رقم الفاتورة..." : "بدء الفاتورة"}
       </button>
     </Modal>
   );
@@ -1684,21 +1765,21 @@ function RenameCustomerModal({ initialName, customerNameOptions, onSave, onClose
   );
 }
 
-function makeEmptyInvoice(tierKey, label, customerName) {
-  return { id: uid(), label, tierKey, customerName: customerName || "", items: [], suppressYellow: false, suppressRed: false };
+function makeEmptyInvoice(tierKey, label, customerName, invoiceNumber) {
+  return { id: uid(), label, invoiceNumber, tierKey, customerName: customerName || "", items: [], suppressYellow: false, suppressRed: false };
 }
 
-function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, setView }) {
+function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, setView }) {
   const [invoices, setInvoices] = useState(() => (loadCashierInvoices()?.invoices) || []);
   const [activeId, setActiveId] = useState(() => {
     const saved = loadCashierInvoices();
     return saved && saved.invoices.length ? saved.invoices[0].id : null;
   });
   const [showNewInvoicePicker, setShowNewInvoicePicker] = useState(false);
-  const invoiceCounterRef = React.useRef(loadCashierInvoices()?.counter || 0);
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
 
   useEffect(() => {
-    saveCashierInvoices(invoices, invoiceCounterRef.current);
+    saveCashierInvoices(invoices);
   }, [invoices]);
 
   const [query, setQuery] = useState("");
@@ -1753,12 +1834,15 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results.map((p) => p.id).join(","), topProducts.map((p) => p.id).join(",")]);
 
-  const createInvoice = (tierKey, customerName) => {
-    invoiceCounterRef.current += 1;
-    const inv = makeEmptyInvoice(tierKey, `فاتورة ${invoiceCounterRef.current}`, customerName);
+  const createInvoice = async (tierKey, customerName) => {
+    setCreatingInvoice(true);
+    const { number, updatedSettings } = await claimNextInvoiceNumber(invoiceNumberSettings);
+    setInvoiceNumberSettings(updatedSettings);
+    const inv = makeEmptyInvoice(tierKey, `فاتورة ${number}`, customerName, number);
     setInvoices((list) => [...list, inv]);
     setActiveId(inv.id);
     setShowNewInvoicePicker(false);
+    setCreatingInvoice(false);
   };
 
   const updateActiveInvoice = (patch) => {
@@ -1883,6 +1967,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       id: uid(),
       employeeName: user.name,
       customerName: activeInvoice.customerName || null,
+      invoiceNumber: activeInvoice.invoiceNumber,
       tierKey: activeInvoice.tierKey,
       items: activeInvoice.items.map((it) => ({ productName: it.productName, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
       total,
@@ -1938,6 +2023,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
         {activeInvoice && (
           <>
             <div className="flex items-center gap-2 mb-3">
+              <span className="text-xs font-bold text-sky-400 shrink-0">فاتورة #{activeInvoice.invoiceNumber ?? "?"}</span>
               <span className="text-sm font-bold text-white flex-1">{activeInvoice.customerName || "بدون اسم زبون"}</span>
               <button onClick={() => setRenamingCustomer(true)} className="icon-btn rounded-lg p-1.5"><Icon name="Pencil" size={14} /></button>
               <button onClick={() => setCancelPrompt(activeInvoice.id)} className="icon-btn rounded-lg p-1.5 text-rose-400"><Icon name="Trash2" size={14} /></button>
@@ -2024,7 +2110,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
         )}
 
         {showNewInvoicePicker && (
-          <NewInvoiceTierModal customerNameOptions={customerNameOptions} customerTierMap={customerTierMap} tierSettings={tierSettings} onCreate={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />
+          <NewInvoiceTierModal customerNameOptions={customerNameOptions} customerTierMap={customerTierMap} tierSettings={tierSettings} busy={creatingInvoice} onCreate={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />
         )}
 
         {pickerProduct && activeInvoice && !mergePrompt && (
@@ -3327,7 +3413,7 @@ function ReportsScreen({ user, orders, sales, setView }) {
                     <div className="flex items-start justify-between mb-2">
                       <div>
                         <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Wallet" size={15} className="text-[#9A9EA6]" /> {s.customerName || "بدون اسم زبون"}</h3>
-                        <p className="text-xs text-[#9A9EA6] mt-0.5">{s.items.length} صنف</p>
+                        <p className="text-xs text-[#9A9EA6] mt-0.5">فاتورة #{s.invoiceNumber ?? "?"} · {s.items.length} صنف</p>
                       </div>
                       <span className="font-bold text-lg text-sky-400 tabular-nums">{s.total}</span>
                     </div>
@@ -3931,14 +4017,80 @@ function TierSettingsModal({ tierSettings, setTierSettings, onClose }) {
   );
 }
 
-function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, onDevReset, setView }) {
+function InvoiceNumberSettingsModal({ invoiceNumberSettings, setInvoiceNumberSettings, onClose }) {
+  const [resetFrequency, setResetFrequency] = useState(invoiceNumberSettings.resetFrequency);
+  const [resetNowConfirm, setResetNowConfirm] = useState(false);
+
+  const FREQ_OPTIONS = [
+    { key: "never", label: "أبدًا (يفضل يزيد على طول)" },
+    { key: "daily", label: "يوميًا (يرجع ١ كل يوم)" },
+    { key: "monthly", label: "شهريًا (يرجع ١ كل شهر)" },
+  ];
+
+  const save = () => {
+    const updated = { ...invoiceNumberSettings, resetFrequency };
+    setInvoiceNumberSettings(updated);
+    settingsStore.upsert(updated);
+    onClose();
+  };
+
+  const resetNow = () => {
+    const updated = { ...invoiceNumberSettings, resetFrequency, nextNumber: 1, lastResetKey: currentResetKey(resetFrequency) };
+    setInvoiceNumberSettings(updated);
+    settingsStore.upsert(updated);
+    setResetNowConfirm(false);
+    onClose();
+  };
+
+  return (
+    <Modal title="ترقيم الفواتير" accent="#10B981" onClose={onClose}>
+      <p className="text-xs text-[#9A9EA6] mb-3">رقم الفاتورة الجاية: <span className="text-white font-bold">{invoiceNumberSettings.nextNumber}</span></p>
+      <p className="text-xs text-[#9A9EA6] mb-2">الريسيت التلقائي</p>
+      <div className="space-y-2 mb-4">
+        {FREQ_OPTIONS.map((opt) => (
+          <button
+            key={opt.key}
+            onClick={() => setResetFrequency(opt.key)}
+            className={`w-full text-right rounded-xl px-3 py-2.5 text-sm font-bold ${resetFrequency === opt.key ? "toggle-pill active-sky" : "field-input"}`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {!resetNowConfirm ? (
+        <button onClick={() => setResetNowConfirm(true)} className="w-full text-xs text-rose-400 font-semibold py-2 mb-3">إعادة الترقيم لـ ١ دلوقتي</button>
+      ) : (
+        <div className="mb-3 bg-rose-950/40 border border-rose-800 rounded-xl p-3">
+          <p className="text-xs text-rose-300 mb-2">متأكد؟ الفاتورة الجاية هتاخد رقم ١</p>
+          <div className="flex gap-2">
+            <button onClick={resetNow} className="flex-1 rounded-lg py-1.5 text-xs font-bold bg-rose-600 text-white">أيوه</button>
+            <button onClick={() => setResetNowConfirm(false)} className="btn-ghost flex-1 rounded-lg py-1.5 text-xs font-bold">إلغاء</button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
+      </div>
+    </Modal>
+  );
+}
+
+function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, onDevReset, setView }) {
   const isAdmin = user.role === "admin";
   const [openSection, setOpenSection] = useState(null);
 
   const items = [
     { key: "password", label: "تغيير كلمة السر", icon: "Lock" },
-    { key: "dev", label: "دخول المطور", icon: "KeyRound" },
-    ...(isAdmin ? [{ key: "tiers", label: "ميزات إضافية (أدمن فقط)", icon: "Settings" }] : []),
+    ...(isAdmin
+      ? [
+          { key: "dev", label: "دخول المطور", icon: "KeyRound" },
+          { key: "tiers", label: "ميزات إضافية", icon: "Settings" },
+          { key: "invoiceNumbering", label: "ترقيم الفواتير", icon: "Tag" },
+        ]
+      : []),
   ];
 
   return (
@@ -3968,6 +4120,9 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
       )}
       {openSection === "tiers" && (
         <TierSettingsModal tierSettings={tierSettings} setTierSettings={setTierSettings} onClose={() => setOpenSection(null)} />
+      )}
+      {openSection === "invoiceNumbering" && (
+        <InvoiceNumberSettingsModal invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} onClose={() => setOpenSection(null)} />
       )}
     </div>
   );
@@ -4156,6 +4311,7 @@ function App() {
   const [withdrawals, setWithdrawals] = useState([]);
   const [sales, setSales] = useState([]);
   const [tierSettings, setTierSettings] = useState(DEFAULT_TIER_SETTINGS);
+  const [invoiceNumberSettings, setInvoiceNumberSettings] = useState(DEFAULT_INVOICE_NUMBER_SETTINGS);
   const [screen, setScreen] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
   const [pendingStatus, setPendingStatus] = useState("pending");
@@ -4224,6 +4380,10 @@ function App() {
           ...savedTierSettings,
           tiers: (tiers && tiers.length ? tiers : DEFAULT_TIER_SETTINGS.tiers).map((t) => ({ archived: false, ...t })),
         });
+      }
+      const savedInvoiceNumberSettings = loadedSettings && loadedSettings.find((s) => s.id === "invoice_number_settings");
+      if (savedInvoiceNumberSettings) {
+        setInvoiceNumberSettings({ ...DEFAULT_INVOICE_NUMBER_SETTINGS, ...savedInvoiceNumberSettings });
       }
 
       // Restore session — works once this is a real web page or the APK.
@@ -4457,8 +4617,8 @@ function App() {
       {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} sales={sales} setView={nav} />}
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
-      {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} onDevReset={performFullReset} setView={nav} />}
-      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} setView={nav} />}
+      {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} onDevReset={performFullReset} setView={nav} />}
+      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} setView={nav} />}
       {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
