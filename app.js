@@ -1,6 +1,6 @@
 const { useState, useEffect } = React;
 
-const ICONS = {"Store": "🏪", "User": "👤", "Lock": "🔒", "Users": "👥", "Package": "📦", "BarChart3": "📊", "LogOut": "🚪", "Plus": "➕", "Trash2": "🗑", "Pencil": "✏️", "CheckCircle2": "✅", "XCircle": "❌", "Clock": "🕐", "ChevronLeft": "‹", "AlertCircle": "⚠️", "KeyRound": "🔑", "Check": "✓", "X": "✕", "Loader2": "⏳", "Search": "🔍", "Camera": "📷", "MessageCircle": "💬", "Truck": "🚚", "MapPin": "📍", "Banknote": "💵", "Smartphone": "📱", "RotateCcw": "↺", "Wallet": "👛", "RefreshCw": "🔄", "Bell": "🔔", "Settings": "⚙️", "Send": "📤", "Tag": "🏷", "ScanLine": "📷", "Printer": "🖨️"};
+const ICONS = {"Store": "🏪", "User": "👤", "Lock": "🔒", "Users": "👥", "Package": "📦", "BarChart3": "📊", "LogOut": "🚪", "Plus": "➕", "Trash2": "🗑", "Pencil": "✏️", "CheckCircle2": "✅", "XCircle": "❌", "Clock": "🕐", "ChevronLeft": "‹", "AlertCircle": "⚠️", "KeyRound": "🔑", "Check": "✓", "X": "✕", "Loader2": "⏳", "Search": "🔍", "Camera": "📷", "MessageCircle": "💬", "Truck": "🚚", "MapPin": "📍", "Banknote": "💵", "Smartphone": "📱", "RotateCcw": "↺", "Wallet": "👛", "RefreshCw": "🔄", "Bell": "🔔", "Settings": "⚙️", "Send": "📤", "Tag": "🏷", "ScanLine": "📷", "Printer": "🖨️", "Menu": "☰", "ChevronDown": "⌄"};
 
 function Icon({ name, size = 18, className = "", style = {} }) {
   return (
@@ -381,6 +381,23 @@ function clearSession() {
   try { localStorage.removeItem(SESSION_KEY); } catch {}
 }
 
+// Keeps open cashier invoices (tabs/carts) on the device so they survive
+// navigating away from the Cashier screen or closing the app mid-sale.
+const CASHIER_INVOICES_KEY = "faaroon_cashier_invoices";
+
+function saveCashierInvoices(invoices, counter) {
+  try { localStorage.setItem(CASHIER_INVOICES_KEY, JSON.stringify({ invoices, counter })); } catch {}
+}
+
+function loadCashierInvoices() {
+  try {
+    const raw = localStorage.getItem(CASHIER_INVOICES_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 function normalizeArabic(str) {
@@ -745,33 +762,97 @@ function PendingScreen({ status, goLogin }) {
 }
 
 // ---------- Shared header (vivid gradient "notch") ----------
-function Header({ user, onLogout, title, onBack, onOpenProfile }) {
+function SideDrawer({ user, onNav, onClose }) {
+  const items = [
+    { key: "menu", label: "الرئيسية", icon: "Store" },
+    { key: "cashier", label: "الكاشير", icon: "Wallet" },
+    { key: "prices", label: "أسعار المحل", icon: "Store", adminOnly: true },
+    { key: "orders", label: "الطلبات", icon: "Package" },
+    { key: "transfers", label: "تحويلات", icon: "Send" },
+    { key: "attendance", label: "الحضور والسحب", icon: "Clock" },
+    { key: "admin", label: "إدارة المستخدمين", icon: "Users", adminOnly: true },
+    { key: "reports", label: "التقارير", icon: "BarChart3", adminOnly: true },
+    { key: "stock-alerts", label: "تنبيهات المخزون", icon: "AlertCircle", adminOnly: true },
+    { key: "settings", label: "الإعدادات", icon: "Settings" },
+  ].filter((i) => !i.adminOnly || user.role === "admin");
+
+  const [cashierExpanded, setCashierExpanded] = useState(false);
+  const pendingInvoices = (loadCashierInvoices()?.invoices) || [];
+
   return (
-    <div className="header-bar mx-4 mt-4 mb-2 flex justify-between items-center p-4 rounded-2xl shadow-lg">
-      <div className="text-right flex items-center gap-3">
-        {onBack && (
-          <button onClick={onBack} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
-            <Icon name="ChevronLeft" size={18} />
-          </button>
-        )}
-        <div>
-          <h1 className="text-xl font-bold text-white tracking-wide">{title}</h1>
-          <p className="text-white/85 text-xs mt-0.5">
-            {user.name} · <span className="font-semibold">{user.role === "admin" ? "أدمن" : "موظف"}</span>
-          </p>
+    <div className="fixed inset-0 z-[120]">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute top-0 right-0 h-full w-72 max-w-[80vw] bg-[#171A20] shadow-2xl p-4 overflow-y-auto" dir="rtl" style={{ animation: "slideInRight 0.18s ease" }}>
+        <h2 className="text-white font-bold text-lg mb-4">الأقسام</h2>
+        <div className="space-y-1">
+          {items.map((it) => (
+            <div key={it.key}>
+              <div className="flex items-center">
+                <button onClick={() => onNav(it.key)} className="flex-1 flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-bold text-[#D4D4D8] hover:bg-white/5 text-right transition-colors">
+                  <Icon name={it.icon} size={17} />
+                  {it.label}
+                </button>
+                {it.key === "cashier" && pendingInvoices.length > 0 && (
+                  <button onClick={() => setCashierExpanded((v) => !v)} className="p-2 text-[#9A9EA6]">
+                    <Icon name="ChevronDown" size={14} style={{ transform: cashierExpanded ? "rotate(180deg)" : "none", display: "inline-block", transition: "transform 0.15s" }} />
+                  </button>
+                )}
+              </div>
+              {it.key === "cashier" && cashierExpanded && pendingInvoices.length > 0 && (
+                <div className="pr-8 space-y-1 mb-1">
+                  {pendingInvoices.map((inv) => (
+                    <button key={inv.id} onClick={() => onNav("cashier")} className="block w-full text-right text-xs text-[#9A9EA6] py-1.5 hover:text-white">
+                      {inv.customerName || inv.label} — {inv.items.length} صنف لسه ما اتأكدش
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
-      <div className="flex items-center gap-1.5">
-        {onOpenProfile && (
-          <button onClick={onOpenProfile} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
-            <Icon name="Settings" size={17} />
-          </button>
-        )}
-        <button onClick={onLogout} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
-          <Icon name="LogOut" size={18} />
-        </button>
-      </div>
     </div>
+  );
+}
+
+function Header({ user, onLogout, title, onBack, onNav }) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  return (
+    <>
+      <div className="header-bar mx-4 mt-4 mb-2 flex justify-between items-center p-4 rounded-2xl shadow-lg">
+        <div className="text-right flex items-center gap-3">
+          {onBack && (
+            <button onClick={onBack} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
+              <Icon name="ChevronLeft" size={18} />
+            </button>
+          )}
+          <div>
+            <h1 className="text-xl font-bold text-white tracking-wide">{title}</h1>
+            <p className="text-white/85 text-xs mt-0.5">
+              {user.name} · <span className="font-semibold">{user.role === "admin" ? "أدمن" : "موظف"}</span>
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {onNav && (
+            <button onClick={() => onNav("settings")} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
+              <Icon name="Settings" size={17} />
+            </button>
+          )}
+          {onNav && (
+            <button onClick={() => setDrawerOpen(true)} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
+              <Icon name="Menu" size={18} />
+            </button>
+          )}
+          <button onClick={onLogout} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
+            <Icon name="LogOut" size={18} />
+          </button>
+        </div>
+      </div>
+      {drawerOpen && onNav && (
+        <SideDrawer user={user} onNav={(key) => { onNav(key); setDrawerOpen(false); }} onClose={() => setDrawerOpen(false)} />
+      )}
+    </>
   );
 }
 
@@ -819,14 +900,13 @@ function ProfileModal({ user, users, setUsers, onClose, onUpdated }) {
 }
 
 // ---------- Main menu ----------
-function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile, onDevReset }) {
+function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
   const items = [
     { key: "cashier", label: "الكاشير", desc: "بيع منتجات وطباعة فاتورة", icon: "Wallet", enabled: true, accent: "#10B981" },
     { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: user.role === "admin", accent: "#10B981" },
     { key: "orders", label: "الطلبات", desc: "تسجيل أوردرات جديدة", icon: "Package", enabled: true, accent: "#F59E0B" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
     { key: "attendance", label: "الحضور والسحب", desc: "سجل حضورك وسحوباتك", icon: "Clock", enabled: true, accent: "#0EA5E9" },
-    { key: "settings", label: "الإعدادات", desc: "كلمة السر وتخصيص التطبيق", icon: "Settings", enabled: true, accent: "#6B7280" },
     { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: user.role === "admin", accent: "#0EA5E9" },
     { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: user.role === "admin", accent: "#F43F5E" },
     { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: user.role === "admin", accent: "#F59E0B" },
@@ -853,7 +933,7 @@ function MainMenu({ user, setView, onLogout, hasNew, onOpenProfile, onDevReset }
 
   return (
     <div className="shop-root">
-      <Header user={user} onLogout={onLogout} title="محلات FaAroon" onOpenProfile={onOpenProfile} />
+      <Header user={user} onLogout={onLogout} title="محلات FaAroon" onNav={setView} />
 
       <div className="max-w-md mx-auto px-4 py-4 grid grid-cols-2 gap-3 fade-up">
         {items.map((it) => {
@@ -1372,20 +1452,34 @@ function TierColorButton({ color, active, onClick, label }) {
   );
 }
 
-function NewInvoiceTierModal({ customerNameOptions, tierSettings, onCreate, onClose }) {
+function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSettings, onCreate, onClose }) {
   const [tierKey, setTierKey] = useState(null);
   const [customerName, setCustomerName] = useState("");
+  const [tierAutoPicked, setTierAutoPicked] = useState(false);
+
+  const handleNameChange = (val) => {
+    setCustomerName(val);
+    const knownTier = customerTierMap[val.trim()];
+    if (knownTier && activeTiers(tierSettings).some((t) => t.id === knownTier)) {
+      setTierKey(knownTier);
+      setTierAutoPicked(true);
+    } else if (tierAutoPicked) {
+      setTierKey(null);
+      setTierAutoPicked(false);
+    }
+  };
 
   return (
     <Modal title="فاتورة جديدة" accent="#10B981" onClose={onClose}>
       <p className="text-xs text-[#9A9EA6] mb-1.5">اسم الزبون (اختياري)</p>
       <input
         value={customerName}
-        onChange={(e) => setCustomerName(e.target.value)}
+        onChange={(e) => handleNameChange(e.target.value)}
         list="cashier-customer-names"
         placeholder="اكتب اسم الزبون"
-        className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4"
+        className="field-input w-full rounded-xl px-3 py-2 text-sm mb-1.5"
       />
+      {tierAutoPicked && <p className="text-[11px] text-sky-400 mb-2.5">اخترنا تصنيف السعر تلقائي بناءً على آخر مرة اشترى فيها</p>}
       <datalist id="cashier-customer-names">
         {customerNameOptions.map((n) => <option key={n} value={n} />)}
       </datalist>
@@ -1396,7 +1490,7 @@ function NewInvoiceTierModal({ customerNameOptions, tierSettings, onCreate, onCl
             key={tier.id}
             color={tier.color}
             active={tierKey === tier.id}
-            onClick={() => setTierKey(tier.id)}
+            onClick={() => { setTierKey(tier.id); setTierAutoPicked(false); }}
             label={tierSettings.hideFromCustomer ? "" : tier.label}
           />
         ))}
@@ -1413,6 +1507,37 @@ function NewInvoiceTierModal({ customerNameOptions, tierSettings, onCreate, onCl
 }
 
 // Handles both adding a new cart line and editing an existing one (pass existingItem).
+function NumPad({ title, initialValue, onConfirm, onClose }) {
+  const [value, setValue] = useState(initialValue || "");
+  const KEYS = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "⌫"];
+
+  const press = (k) => {
+    if (k === "⌫") {
+      setValue((v) => v.slice(0, -1));
+      return;
+    }
+    if (k === "." && value.includes(".")) return;
+    setValue((v) => v + k);
+  };
+
+  return (
+    <Modal title={title} accent="#0EA5E9" onClose={onClose}>
+      <div className="text-center text-3xl font-bold text-white mb-4 tabular-nums py-3 border-b border-white/10 min-h-[3rem]">{value || "0"}</div>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        {KEYS.map((k) => (
+          <button key={k} onClick={() => press(k)} className="btn-ghost rounded-xl py-4 text-xl font-bold">
+            {k}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => onConfirm(value)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold">تم</button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إلغاء</button>
+      </div>
+    </Modal>
+  );
+}
+
 function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAdd, onUpdate, onSuppressWarning, onClose }) {
   const [tierKey, setTierKey] = useState(existingItem?.tierKey || invoice.tierKey);
   const [qty, setQty] = useState(existingItem ? String(existingItem.qty) : "1");
@@ -1420,6 +1545,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
   const [manualPrice, setManualPrice] = useState(existingItem ? String(existingItem.unitPrice) : "");
   const [error, setError] = useState("");
   const [warning, setWarning] = useState(null);
+  const [numPadTarget, setNumPadTarget] = useState(null);
 
   const rows = tierRows(product[tierKey]);
   const qtyNum = parseNum(qty) || 1;
@@ -1498,7 +1624,9 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
       </div>
 
       <p className="text-xs text-[#9A9EA6] mb-1.5">الكمية</p>
-      <input value={qty} onChange={(e) => setQty(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4 text-center" />
+      <button onClick={() => setNumPadTarget("qty")} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4 text-center block font-bold tabular-nums">
+        {qty || "0"}
+      </button>
 
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-xs text-[#9A9EA6]">السعر</span>
@@ -1507,13 +1635,51 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
         )}
       </div>
       {priceOverridden ? (
-        <input value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
+        <button onClick={() => setNumPadTarget("price")} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center block font-bold tabular-nums">
+          {manualPrice || "0"}
+        </button>
       ) : (
-        <p className="text-center text-lg font-bold text-white mb-3 tabular-nums">{displayPrice}</p>
+        <p className="text-center text-lg font-bold mb-3 tabular-nums" style={{ color: activeTiers(tierSettings).find((t) => t.id === tierKey)?.color || "#fff" }}>{displayPrice}</p>
       )}
 
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <button onClick={confirm} className="btn-emerald w-full rounded-xl py-2.5 font-bold">{existingItem ? "حفظ التعديل" : "إضافة للسلة"}</button>
+
+      {numPadTarget && (
+        <NumPad
+          title={numPadTarget === "qty" ? "الكمية" : "السعر"}
+          initialValue={numPadTarget === "qty" ? qty : manualPrice}
+          onConfirm={(v) => {
+            if (numPadTarget === "qty") setQty(v);
+            else setManualPrice(v);
+            setNumPadTarget(null);
+          }}
+          onClose={() => setNumPadTarget(null)}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function RenameCustomerModal({ initialName, customerNameOptions, onSave, onClose }) {
+  const [name, setName] = useState(initialName || "");
+  return (
+    <Modal title="اسم الزبون" accent="#0EA5E9" onClose={onClose}>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        list="cashier-customer-names-rename"
+        placeholder="اكتب اسم الزبون"
+        className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4"
+        autoFocus
+      />
+      <datalist id="cashier-customer-names-rename">
+        {customerNameOptions.map((n) => <option key={n} value={n} />)}
+      </datalist>
+      <div className="flex gap-2">
+        <button onClick={() => onSave(name.trim())} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
+      </div>
     </Modal>
   );
 }
@@ -1523,10 +1689,17 @@ function makeEmptyInvoice(tierKey, label, customerName) {
 }
 
 function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, setView }) {
-  const [invoices, setInvoices] = useState([]);
-  const [activeId, setActiveId] = useState(null);
+  const [invoices, setInvoices] = useState(() => (loadCashierInvoices()?.invoices) || []);
+  const [activeId, setActiveId] = useState(() => {
+    const saved = loadCashierInvoices();
+    return saved && saved.invoices.length ? saved.invoices[0].id : null;
+  });
   const [showNewInvoicePicker, setShowNewInvoicePicker] = useState(false);
-  const invoiceCounterRef = React.useRef(0);
+  const invoiceCounterRef = React.useRef(loadCashierInvoices()?.counter || 0);
+
+  useEffect(() => {
+    saveCashierInvoices(invoices, invoiceCounterRef.current);
+  }, [invoices]);
 
   const [query, setQuery] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -1540,13 +1713,45 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const [notFoundToast, setNotFoundToast] = useState(false);
   const [mergePrompt, setMergePrompt] = useState(null);
   const [priceDiffToast, setPriceDiffToast] = useState("");
+  const [renamingCustomer, setRenamingCustomer] = useState(false);
+  const [imageCache, setImageCache] = useState({});
+  const [addedToast, setAddedToast] = useState("");
+  const [cancelPrompt, setCancelPrompt] = useState(null);
+  const [undoItem, setUndoItem] = useState(null);
+  const undoTimerRef = React.useRef(null);
 
   const activeInvoice = invoices.find((inv) => inv.id === activeId) || null;
   const customerNameOptions = [...new Set(sales.map((s) => s.customerName).filter(Boolean))];
+  const customerTierMap = {};
+  sales.forEach((s) => {
+    if (s.customerName && s.tierKey) customerTierMap[s.customerName] = s.tierKey;
+  });
+
+  const salesCountByName = {};
+  sales.forEach((s) => {
+    s.items.forEach((it) => {
+      salesCountByName[it.productName] = (salesCountByName[it.productName] || 0) + it.qty;
+    });
+  });
+  const topProducts = Object.entries(salesCountByName)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name]) => products.find((p) => p.name === name))
+    .filter(Boolean);
 
   const normalizedQuery = normalizeArabic(query);
   const results = normalizedQuery ? products.filter((p) => normalizeArabic(p.name).includes(normalizedQuery)).slice(0, 12) : [];
   const total = activeInvoice ? activeInvoice.items.reduce((s, it) => s + it.lineTotal, 0) : 0;
+
+  useEffect(() => {
+    const visibleIds = [...results.map((p) => p.id), ...topProducts.map((p) => p.id)];
+    const missing = [...new Set(visibleIds)].filter((id) => !(id in imageCache));
+    if (missing.length === 0) return;
+    batchGetImages(missing).then((map) => {
+      setImageCache((c) => ({ ...c, ...Object.fromEntries(missing.map((id) => [id, map[id] || null])) }));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results.map((p) => p.id).join(","), topProducts.map((p) => p.id).join(",")]);
 
   const createInvoice = (tierKey, customerName) => {
     invoiceCounterRef.current += 1;
@@ -1575,6 +1780,8 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
   const commitNewItem = (payload) => {
     updateActiveInvoice({ items: [...activeInvoice.items, { id: uid(), ...payload }] });
+    setAddedToast(`✓ اتضاف ${payload.productName}`);
+    setTimeout(() => setAddedToast(""), 1500);
     finishAddOrScan();
   };
 
@@ -1617,7 +1824,40 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   };
 
   const removeFromCart = (id) => {
+    const item = activeInvoice.items.find((it) => it.id === id);
     updateActiveInvoice({ items: activeInvoice.items.filter((it) => it.id !== id) });
+    if (item) {
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+      setUndoItem({ item, invoiceId: activeInvoice.id });
+      undoTimerRef.current = setTimeout(() => setUndoItem(null), 4000);
+    }
+  };
+
+  const undoRemove = () => {
+    if (!undoItem) return;
+    setInvoices((list) => list.map((inv) => (inv.id === undoItem.invoiceId ? { ...inv, items: [...inv.items, undoItem.item] } : inv)));
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoItem(null);
+  };
+
+  const adjustQty = (id, delta) => {
+    const item = activeInvoice.items.find((it) => it.id === id);
+    if (!item) return;
+    const newQty = item.qty + delta;
+    if (newQty <= 0) {
+      removeFromCart(id);
+      return;
+    }
+    updateActiveInvoice({
+      items: activeInvoice.items.map((it) => (it.id === id ? { ...it, qty: newQty, lineTotal: it.unitPrice * newQty } : it)),
+    });
+  };
+
+  const closeInvoice = (id) => {
+    const remaining = invoices.filter((inv) => inv.id !== id);
+    setInvoices(remaining);
+    if (activeId === id) setActiveId(remaining.length ? remaining[0].id : null);
+    setCancelPrompt(null);
   };
 
   const handleScanResult = (code) => {
@@ -1643,6 +1883,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       id: uid(),
       employeeName: user.name,
       customerName: activeInvoice.customerName || null,
+      tierKey: activeInvoice.tierKey,
       items: activeInvoice.items.map((it) => ({ productName: it.productName, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
       total,
       paid: true,
@@ -1667,7 +1908,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
   return (
     <div className="shop-root">
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الكاشير" />
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الكاشير" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-6">
         {productsLoading && products.length === 0 && (
           <div className="flex items-center justify-center gap-2 py-10 text-[#9A9EA6] text-sm">
@@ -1682,7 +1923,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
               onClick={() => setActiveId(inv.id)}
               className={`shrink-0 rounded-xl px-3 py-2 text-xs font-bold ${activeId === inv.id ? "btn-sky" : "btn-ghost"}`}
             >
-              {inv.label}
+              {inv.customerName || inv.label}
             </button>
           ))}
           <button onClick={() => setShowNewInvoicePicker(true)} className="shrink-0 icon-btn rounded-xl px-3 py-2 flex items-center gap-1">
@@ -1696,27 +1937,49 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         {activeInvoice && (
           <>
-            <input
-              value={activeInvoice.customerName}
-              onChange={(e) => updateActiveInvoice({ customerName: e.target.value })}
-              list="cashier-customer-names-active"
-              placeholder="اسم الزبون (اختياري)"
-              className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3"
-            />
-            <datalist id="cashier-customer-names-active">
-              {customerNameOptions.map((n) => <option key={n} value={n} />)}
-            </datalist>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-sm font-bold text-white flex-1">{activeInvoice.customerName || "بدون اسم زبون"}</span>
+              <button onClick={() => setRenamingCustomer(true)} className="icon-btn rounded-lg p-1.5"><Icon name="Pencil" size={14} /></button>
+              <button onClick={() => setCancelPrompt(activeInvoice.id)} className="icon-btn rounded-lg p-1.5 text-rose-400"><Icon name="Trash2" size={14} /></button>
+            </div>
 
             <div className="flex gap-2 mb-3">
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن منتج تضيفه..." className="field-input flex-1 rounded-xl px-4 py-2.5 text-sm" />
               <button onClick={() => { setPickerViaScan(true); setScanning(true); }} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
             </div>
 
+            {!query && topProducts.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs text-[#9A9EA6] mb-2">الأكتر مبيعًا</p>
+                <div className="flex flex-wrap gap-2">
+                  {topProducts.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => { setPickerViaScan(false); setPickerProduct(p); }}
+                      className="btn-ghost rounded-full px-3 py-1.5 text-xs font-bold flex items-center gap-1.5"
+                    >
+                      {imageCache[p.id] ? (
+                        <img src={imageCache[p.id]} alt="" className="w-4 h-4 rounded-full object-cover" />
+                      ) : (
+                        <Icon name="Store" size={12} className="text-[#6B7078]" />
+                      )}
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {results.length > 0 && (
               <div className="space-y-2 mb-4">
                 {results.map((p) => (
                   <button key={p.id} onClick={() => { setPickerViaScan(false); setPickerProduct(p); }} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
-                    <span className="font-bold text-sm text-white">{p.name}</span>
+                    <span className="flex items-center gap-2.5">
+                      <span className="w-9 h-9 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
+                        {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={16} className="text-[#4B4F58]" />}
+                      </span>
+                      <span className="font-bold text-sm text-white">{p.name}</span>
+                    </span>
                     <Icon name="Plus" size={16} className="text-emerald-400" />
                   </button>
                 ))}
@@ -1727,15 +1990,18 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             {activeInvoice.items.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
             <div className="space-y-2 mb-4">
               {activeInvoice.items.map((it) => (
-                <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between">
-                  <button onClick={() => setEditingItem(it)} className="text-right flex-1">
-                    <p className="font-bold text-sm text-white">{it.productName}</p>
-                    <p className="text-xs text-[#9A9EA6]">× {it.qty}</p>
+                <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between gap-2">
+                  <button onClick={() => setEditingItem(it)} className="text-right flex-1 min-w-0">
+                    <p className="font-bold text-sm text-white truncate">{it.productName}</p>
+                    <p className="text-xs text-[#9A9EA6]">{it.unitPrice} × {it.qty}</p>
                   </button>
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
-                    <button onClick={() => removeFromCart(it.id)} className="text-rose-400"><Icon name="X" size={16} /></button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => adjustQty(it.id, -1)} className="icon-btn rounded-lg w-7 h-7 flex items-center justify-center font-bold text-sm">−</button>
+                    <span className="w-6 text-center text-sm font-bold text-white tabular-nums">{it.qty}</span>
+                    <button onClick={() => adjustQty(it.id, 1)} className="icon-btn rounded-lg w-7 h-7 flex items-center justify-center font-bold text-sm">+</button>
                   </div>
+                  <span className="font-bold text-emerald-400 tabular-nums shrink-0 w-14 text-left">{it.lineTotal}</span>
+                  <button onClick={() => removeFromCart(it.id)} className="text-rose-400 shrink-0"><Icon name="X" size={16} /></button>
                 </div>
               ))}
             </div>
@@ -1758,7 +2024,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
         )}
 
         {showNewInvoicePicker && (
-          <NewInvoiceTierModal customerNameOptions={customerNameOptions} tierSettings={tierSettings} onCreate={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />
+          <NewInvoiceTierModal customerNameOptions={customerNameOptions} customerTierMap={customerTierMap} tierSettings={tierSettings} onCreate={createInvoice} onClose={() => setShowNewInvoicePicker(false)} />
         )}
 
         {pickerProduct && activeInvoice && !mergePrompt && (
@@ -1786,6 +2052,15 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         {scanning && <BarcodeScannerModal onDetected={handleScanResult} onClose={() => { setScanning(false); setPickerViaScan(false); }} />}
 
+        {renamingCustomer && activeInvoice && (
+          <RenameCustomerModal
+            initialName={activeInvoice.customerName}
+            customerNameOptions={customerNameOptions}
+            onSave={(name) => { updateActiveInvoice({ customerName: name }); setRenamingCustomer(false); }}
+            onClose={() => setRenamingCustomer(false)}
+          />
+        )}
+
         {mergePrompt && (
           <Modal title="المنتج ده متسجل بالفعل" accent="#0EA5E9" onClose={cancelMerge}>
             <p className="text-sm text-[#D4D4D8] mb-4">
@@ -1811,6 +2086,31 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
               {priceDiffToast}
             </div>
           </div>
+        )}
+        {addedToast && (
+          <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+            <div className="bg-emerald-950/90 border border-emerald-700 rounded-xl px-4 py-2 toast-in text-xs text-emerald-300 font-bold">
+              {addedToast}
+            </div>
+          </div>
+        )}
+        {undoItem && (
+          <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+            <div className="bg-[#22252C] border border-white/10 rounded-xl px-4 py-2 toast-in text-xs text-white font-bold flex items-center gap-3">
+              <span>اتشال "{undoItem.item.productName}"</span>
+              <button onClick={undoRemove} className="text-sky-400 font-bold">تراجع</button>
+            </div>
+          </div>
+        )}
+
+        {cancelPrompt && (
+          <Modal title="إلغاء الفاتورة" accent="#EF4444" onClose={() => setCancelPrompt(null)}>
+            <p className="text-sm text-[#D4D4D8] mb-4">هتتمسح الفاتورة دي بكل اللي فيها ومش هتقدر ترجعها. متأكد؟</p>
+            <div className="flex gap-2">
+              <button onClick={() => closeInvoice(cancelPrompt)} className="flex-1 rounded-xl py-2 text-sm font-bold bg-rose-600 text-white">أيوه، امسحها</button>
+              <button onClick={() => setCancelPrompt(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">رجوع</button>
+            </div>
+          </Modal>
         )}
 
         {showCheckout && (
@@ -2182,7 +2482,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   return (
     <div className="shop-root">
       <PullToRefresh onRefresh={handleRefresh} />
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="أسعار المحل" />
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="أسعار المحل" onNav={setView} />
 
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
         {canSeeReportButton && (
@@ -2611,7 +2911,7 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
   return (
     <div className="shop-root">
       <PullToRefresh onRefresh={handleRefresh} />
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الطلبات" />
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الطلبات" onNav={setView} />
 
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
         <button onClick={() => { setShowAdd(true); setError(""); }} className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-4">
@@ -2837,7 +3137,7 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
   return (
     <div className="shop-root">
       <PullToRefresh onRefresh={handleRefresh} />
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="تحويلات" />
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="تحويلات" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
         <button onClick={() => { setShowAdd(true); setError(""); }} className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-4">
           <Icon name="Plus" size={18} /> تسجيل تحويل جديد
@@ -2909,88 +3209,160 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
 }
 
 // ---------- Reports screen (admin only) ----------
-function ReportsScreen({ user, orders, setView }) {
+function ReportsScreen({ user, orders, sales, setView }) {
+  const [tab, setTab] = useState("orders");
   const paidOrders = orders.filter((o) => o.paid).sort((a, b) => b.createdAt - a.createdAt);
-  const total = paidOrders.reduce((s, o) => s + o.price, 0);
+  const ordersTotal = paidOrders.reduce((s, o) => s + o.price, 0);
+  const sortedSales = [...sales].sort((a, b) => b.createdAt - a.createdAt);
+  const salesTotal = sortedSales.reduce((s, sale) => s + sale.total, 0);
   const [expandedId, setExpandedId] = useState(null);
 
   return (
     <div className="shop-root">
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="التقارير" />
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="التقارير" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
-        <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
-          <div>
-            <p className="text-xs text-[#9A9EA6]">أوردرات مؤكدة الدفع</p>
-            <p className="text-2xl font-bold text-emerald-400">{paidOrders.length}</p>
-          </div>
-          <div className="text-left">
-            <p className="text-xs text-[#9A9EA6]">إجمالي المبيعات</p>
-            <p className="text-2xl font-bold text-sky-400 tabular-nums">{total}</p>
-          </div>
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setTab("orders")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${tab === "orders" ? "btn-sky" : "btn-ghost"}`}>الأوردرات</button>
+          <button onClick={() => setTab("sales")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${tab === "sales" ? "btn-sky" : "btn-ghost"}`}>فواتير الكاشير</button>
         </div>
 
-        <div className="space-y-3 pb-6">
-          {paidOrders.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لسه مفيش أوردرات مؤكدة الدفع</p>}
-          {paidOrders.map((o) => {
-            const pay = paymentLabel(o);
-            const expanded = expandedId === o.id;
-            return (
-              <div key={o.id} className="panel p-4 rounded-2xl">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#9A9EA6]" /> {o.repName}</h3>
-                    <p className="text-xs text-[#9A9EA6] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.area}</p>
-                  </div>
-                  <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
-                </div>
-                <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
-                  <span className="text-xs font-bold text-amber-300">{o.employeeName} <span className="text-[#7C818C] font-normal">· {new Date(o.createdAt).toLocaleDateString("ar-EG")}</span></span>
-                </div>
-                {o.confirmedBy && (
-                  <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
-                )}
-
-                {expanded && (
-                  <div className="mt-3 pt-3 border-t border-white/5 space-y-2 text-xs">
-                    {o.dispatchLocation && (
-                      <p className="text-[#D4D4D8]"><span className="text-[#9A9EA6]">مكان الخروج: </span>{o.dispatchLocation}</p>
-                    )}
-                    {o.notes && (
-                      <p className="text-[#D4D4D8] bg-black/15 rounded-lg px-2.5 py-1.5">📝 {o.notes}</p>
-                    )}
-                    {o.paymentMethod === "split" && (
-                      <p className="text-[#D4D4D8]">
-                        <span className="text-[#9A9EA6]">تفاصيل الدفع: </span>
-                        كاش {o.cashAmount} + تحويل {o.splitTransferMethod === "instapay" ? "انستاباي" : "فودافون كاش"} {o.transferAmount}
-                      </p>
-                    )}
-                    <p className="text-[#D4D4D8]">
-                      <span className="text-[#9A9EA6]">وقت الإنشاء: </span>
-                      {new Date(o.createdAt).toLocaleString("ar-EG")}
-                    </p>
-                    {o.confirmedAt && (
-                      <p className="text-[#D4D4D8]">
-                        <span className="text-[#9A9EA6]">وقت تأكيد الدفع: </span>
-                        {new Date(o.confirmedAt).toLocaleString("ar-EG")}
-                      </p>
-                    )}
-                    {o.invoiceImage && (
-                      <InvoiceThumb src={o.invoiceImage} className="w-20 h-20 rounded-lg object-cover border border-white/10" />
-                    )}
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between mt-2">
-                  <button onClick={() => setExpandedId(expanded ? null : o.id)} className="text-xs text-sky-400 font-semibold hover:underline">
-                    {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
-                  </button>
-                  <button onClick={() => printOrderReceipt(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
-                </div>
+        {tab === "orders" && (
+          <>
+            <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-[#9A9EA6]">أوردرات مؤكدة الدفع</p>
+                <p className="text-2xl font-bold text-emerald-400">{paidOrders.length}</p>
               </div>
-            );
-          })}
-        </div>
+              <div className="text-left">
+                <p className="text-xs text-[#9A9EA6]">إجمالي المبيعات</p>
+                <p className="text-2xl font-bold text-sky-400 tabular-nums">{ordersTotal}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 pb-6">
+              {paidOrders.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لسه مفيش أوردرات مؤكدة الدفع</p>}
+              {paidOrders.map((o) => {
+                const pay = paymentLabel(o);
+                const expanded = expandedId === o.id;
+                return (
+                  <div key={o.id} className="panel p-4 rounded-2xl">
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#9A9EA6]" /> {o.repName}</h3>
+                        <p className="text-xs text-[#9A9EA6] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.area}</p>
+                      </div>
+                      <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
+                    </div>
+                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                      <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
+                      <span className="text-xs font-bold text-amber-300">{o.employeeName} <span className="text-[#7C818C] font-normal">· {new Date(o.createdAt).toLocaleDateString("ar-EG")}</span></span>
+                    </div>
+                    {o.confirmedBy && (
+                      <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
+                    )}
+
+                    {expanded && (
+                      <div className="mt-3 pt-3 border-t border-white/5 space-y-2 text-xs">
+                        {o.dispatchLocation && (
+                          <p className="text-[#D4D4D8]"><span className="text-[#9A9EA6]">مكان الخروج: </span>{o.dispatchLocation}</p>
+                        )}
+                        {o.notes && (
+                          <p className="text-[#D4D4D8] bg-black/15 rounded-lg px-2.5 py-1.5">📝 {o.notes}</p>
+                        )}
+                        {o.paymentMethod === "split" && (
+                          <p className="text-[#D4D4D8]">
+                            <span className="text-[#9A9EA6]">تفاصيل الدفع: </span>
+                            كاش {o.cashAmount} + تحويل {o.splitTransferMethod === "instapay" ? "انستاباي" : "فودافون كاش"} {o.transferAmount}
+                          </p>
+                        )}
+                        <p className="text-[#D4D4D8]">
+                          <span className="text-[#9A9EA6]">وقت الإنشاء: </span>
+                          {new Date(o.createdAt).toLocaleString("ar-EG")}
+                        </p>
+                        {o.confirmedAt && (
+                          <p className="text-[#D4D4D8]">
+                            <span className="text-[#9A9EA6]">وقت تأكيد الدفع: </span>
+                            {new Date(o.confirmedAt).toLocaleString("ar-EG")}
+                          </p>
+                        )}
+                        {o.invoiceImage && (
+                          <InvoiceThumb src={o.invoiceImage} className="w-20 h-20 rounded-lg object-cover border border-white/10" />
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between mt-2">
+                      <button onClick={() => setExpandedId(expanded ? null : o.id)} className="text-xs text-sky-400 font-semibold hover:underline">
+                        {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
+                      </button>
+                      <button onClick={() => printOrderReceipt(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {tab === "sales" && (
+          <>
+            <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-[#9A9EA6]">فواتير الكاشير</p>
+                <p className="text-2xl font-bold text-emerald-400">{sortedSales.length}</p>
+              </div>
+              <div className="text-left">
+                <p className="text-xs text-[#9A9EA6]">إجمالي المبيعات</p>
+                <p className="text-2xl font-bold text-sky-400 tabular-nums">{salesTotal}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 pb-6">
+              {sortedSales.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لسه مفيش فواتير كاشير</p>}
+              {sortedSales.map((s) => {
+                const pay = paymentLabel(s);
+                const expanded = expandedId === s.id;
+                return (
+                  <div key={s.id} className="panel p-4 rounded-2xl">
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Wallet" size={15} className="text-[#9A9EA6]" /> {s.customerName || "بدون اسم زبون"}</h3>
+                        <p className="text-xs text-[#9A9EA6] mt-0.5">{s.items.length} صنف</p>
+                      </div>
+                      <span className="font-bold text-lg text-sky-400 tabular-nums">{s.total}</span>
+                    </div>
+                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                      <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
+                      <span className="text-xs font-bold text-amber-300">{s.employeeName} <span className="text-[#7C818C] font-normal">· {new Date(s.createdAt).toLocaleDateString("ar-EG")}</span></span>
+                    </div>
+
+                    {expanded && (
+                      <div className="mt-3 pt-3 border-t border-white/5 space-y-1.5 text-xs">
+                        {s.items.map((it, i) => (
+                          <div key={i} className="flex items-center justify-between text-[#D4D4D8]">
+                            <span>{it.productName} × {it.qty}</span>
+                            <span className="tabular-nums">{it.lineTotal}</span>
+                          </div>
+                        ))}
+                        <p className="text-[#D4D4D8] pt-1.5 border-t border-white/5">
+                          <span className="text-[#9A9EA6]">وقت البيع: </span>
+                          {new Date(s.createdAt).toLocaleString("ar-EG")}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between mt-2">
+                      <button onClick={() => setExpandedId(expanded ? null : s.id)} className="text-xs text-sky-400 font-semibold hover:underline">
+                        {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
+                      </button>
+                      <button onClick={() => printSaleReceipt(s)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -3236,7 +3608,7 @@ function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals,
     return (
       <div className="shop-root">
         <PullToRefresh onRefresh={handleRefresh} />
-        <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الحضور والسحب" />
+        <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الحضور والسحب" onNav={setView} />
         <div className="max-w-lg mx-auto px-4 py-2 fade-up space-y-3 pb-6">
           {employeeList.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لا يوجد موظفين معتمدين بعد</p>}
           {employeeList.map((u) => (
@@ -3354,7 +3726,7 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
   return (
     <div className="shop-root">
       <PullToRefresh onRefresh={handleRefresh} />
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="تنبيهات المخزون" />
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="تنبيهات المخزون" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
         <div className="flex gap-2 mb-3 overflow-x-auto">
           {[
@@ -3397,49 +3769,72 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
 
 // ---------- Admin screen ----------
 // ---------- Settings ----------
-function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, onDevReset, setView }) {
-  const isAdmin = user.role === "admin";
-
+function ChangePasswordModal({ user, users, setUsers, onClose }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [pwError, setPwError] = useState("");
-  const [pwSuccess, setPwSuccess] = useState(false);
+  const [error, setError] = useState("");
 
-  const changePassword = () => {
+  const save = () => {
     if (!newPassword || newPassword.length < 4) {
-      setPwError("كلمة السر لازم تكون ٤ حروف على الأقل");
+      setError("كلمة السر لازم تكون ٤ حروف على الأقل");
       return;
     }
     if (newPassword !== confirmPassword) {
-      setPwError("كلمتا السر مش متطابقتين");
+      setError("كلمتا السر مش متطابقتين");
       return;
     }
     const updated = { ...user, password: newPassword };
     setUsers(users.map((u) => (u.id === user.id ? updated : u)));
     usersStore.upsert(updated);
-    setPwError("");
-    setPwSuccess(true);
-    setNewPassword("");
-    setConfirmPassword("");
-    setTimeout(() => setPwSuccess(false), 2500);
+    onClose();
   };
 
-  const [devPassword, setDevPassword] = useState("");
-  const [devError, setDevError] = useState("");
-  const [devUnlocked, setDevUnlocked] = useState(false);
+  return (
+    <Modal title="تغيير كلمة السر" accent="#38BDF8" onClose={onClose}>
+      <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="كلمة السر الجديدة" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-2" />
+      <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="تأكيد كلمة السر" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+      <div className="flex gap-2">
+        <button onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
+      </div>
+    </Modal>
+  );
+}
 
-  const checkDevPassword = () => {
-    if (devPassword !== DEV_RESET_PASSWORD) {
-      setDevError("كلمة السر غلط");
+function DevLoginModal({ onConfirmed, onClose }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [unlocked, setUnlocked] = useState(false);
+
+  if (unlocked) {
+    return <DevResetModal startAtConfirm onConfirmed={onConfirmed} onClose={onClose} />;
+  }
+
+  const check = () => {
+    if (password !== DEV_RESET_PASSWORD) {
+      setError("كلمة السر غلط");
       return;
     }
-    setDevError("");
-    setDevUnlocked(true);
+    setError("");
+    setUnlocked(true);
   };
 
+  return (
+    <Modal title="دخول المطور" accent="#38BDF8" onClose={onClose}>
+      <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="كلمة سر المطور" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+      <div className="flex gap-2">
+        <button onClick={check} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">دخول</button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
+      </div>
+    </Modal>
+  );
+}
+
+function TierSettingsModal({ tierSettings, setTierSettings, onClose }) {
   const [tiers, setTiers] = useState(tierSettings.tiers);
   const [hideFromCustomer, setHideFromCustomer] = useState(tierSettings.hideFromCustomer);
-  const [tierSaved, setTierSaved] = useState(false);
   const [tierError, setTierError] = useState("");
 
   const TIER_COLOR_CHOICES = ["#34D399", "#FBBF24", "#FB7185", "#60A5FA", "#A78BFA", "#F97316", "#2DD4BF"];
@@ -3465,7 +3860,7 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
     updateTier(id, { archived: false });
   };
 
-  const saveTierSettings = () => {
+  const save = () => {
     if (activeList.some((t) => !t.label.trim())) {
       setTierError("لازم كل تصنيف يكون له اسم");
       return;
@@ -3474,93 +3869,106 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
     const updated = { ...tierSettings, tiers, hideFromCustomer };
     setTierSettings(updated);
     settingsStore.upsert(updated);
-    setTierSaved(true);
-    setTimeout(() => setTierSaved(false), 2000);
+    onClose();
   };
 
   return (
-    <div className="shop-root">
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الإعدادات" />
-      <div className="max-w-lg mx-auto px-4 py-2 fade-up space-y-4 pb-6">
-        <section className="panel rounded-2xl p-4">
-          <h2 className="font-bold text-sm text-white mb-3">تغيير كلمة السر</h2>
-          <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="كلمة السر الجديدة" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-2" />
-          <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="تأكيد كلمة السر" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-2" />
-          {pwError && <p className="text-rose-400 text-xs mb-2">{pwError}</p>}
-          {pwSuccess && <p className="text-emerald-400 text-xs mb-2 font-bold">✓ اتغيرت كلمة السر</p>}
-          <button onClick={changePassword} className="btn-sky w-full rounded-xl py-2 text-sm font-bold">حفظ</button>
-        </section>
-
-        <section className="panel rounded-2xl p-4">
-          <h2 className="font-bold text-sm text-white mb-3">دخول المطور</h2>
-          {!devUnlocked ? (
-            <>
-              <input type="password" value={devPassword} onChange={(e) => setDevPassword(e.target.value)} placeholder="كلمة سر المطور" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-2" />
-              {devError && <p className="text-rose-400 text-xs mb-2">{devError}</p>}
-              <button onClick={checkDevPassword} className="btn-ghost w-full rounded-xl py-2 text-sm font-bold">دخول</button>
-            </>
-          ) : (
-            <DevResetModal startAtConfirm onConfirmed={onDevReset} onClose={() => setDevUnlocked(false)} />
+    <Modal title="ميزات إضافية" accent="#10B981" onClose={onClose}>
+      <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات الأسعار (الأسماء والألوان)</p>
+      {activeList.map((tier) => (
+        <div key={tier.id} className="flex items-center gap-2 mb-2">
+          <input
+            value={tier.label}
+            onChange={(e) => updateTier(tier.id, { label: e.target.value })}
+            placeholder="اسم التصنيف"
+            className="field-input flex-1 rounded-xl px-3 py-2 text-sm"
+          />
+          <input
+            type="color"
+            value={tier.color}
+            onChange={(e) => updateTier(tier.id, { color: e.target.value })}
+            className="w-11 h-10 rounded-lg border border-white/10 bg-transparent shrink-0"
+          />
+          {activeList.length > 1 && (
+            <button onClick={() => archiveTier(tier.id)} className="text-rose-400 shrink-0"><Icon name="Trash2" size={16} /></button>
           )}
-        </section>
+        </div>
+      ))}
 
-        {isAdmin && (
-          <section className="panel rounded-2xl p-4">
-            <h2 className="font-bold text-sm text-white mb-3">ميزات إضافية (أدمن فقط)</h2>
+      <button onClick={addTier} className="w-full text-xs text-sky-400 font-semibold flex items-center justify-center gap-1 py-2 mb-3">
+        <Icon name="Plus" size={14} /> إضافة تصنيف سعر جديد
+      </button>
 
-            <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات الأسعار (الأسماء والألوان)</p>
-            {activeList.map((tier) => (
-              <div key={tier.id} className="flex items-center gap-2 mb-2">
-                <input
-                  value={tier.label}
-                  onChange={(e) => updateTier(tier.id, { label: e.target.value })}
-                  placeholder="اسم التصنيف"
-                  className="field-input flex-1 rounded-xl px-3 py-2 text-sm"
-                />
-                <input
-                  type="color"
-                  value={tier.color}
-                  onChange={(e) => updateTier(tier.id, { color: e.target.value })}
-                  className="w-11 h-10 rounded-lg border border-white/10 bg-transparent shrink-0"
-                />
-                {activeList.length > 1 && (
-                  <button onClick={() => archiveTier(tier.id)} className="text-rose-400 shrink-0"><Icon name="Trash2" size={16} /></button>
-                )}
-              </div>
-            ))}
+      {archivedList.length > 0 && (
+        <div className="mb-3">
+          <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات محذوفة (تقدر ترجّعها)</p>
+          {archivedList.map((tier) => (
+            <div key={tier.id} className="flex items-center gap-2 mb-2 opacity-70">
+              <span className="flex-1 field-input rounded-xl px-3 py-2 text-sm">{tier.label || "(بدون اسم)"}</span>
+              <span className="w-11 h-10 rounded-lg shrink-0" style={{ background: tier.color }} />
+              <button onClick={() => restoreTier(tier.id)} className="text-emerald-400 shrink-0"><Icon name="RefreshCw" size={16} /></button>
+            </div>
+          ))}
+        </div>
+      )}
 
-            <button onClick={addTier} className="w-full text-xs text-sky-400 font-semibold flex items-center justify-center gap-1 py-2 mb-3">
-              <Icon name="Plus" size={14} /> إضافة تصنيف سعر جديد
-            </button>
+      <label className="flex items-center gap-2 text-xs text-[#D4D4D8] mb-3">
+        <input type="checkbox" checked={hideFromCustomer} onChange={(e) => setHideFromCustomer(e.target.checked)} />
+        إخفاء أسماء التصنيفات عن الزبون في الكاشير (زراير ملونة بس)
+      </label>
 
-            {archivedList.length > 0 && (
-              <div className="mb-3">
-                <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات محذوفة (تقدر ترجّعها)</p>
-                {archivedList.map((tier) => (
-                  <div key={tier.id} className="flex items-center gap-2 mb-2 opacity-70">
-                    <span className="flex-1 field-input rounded-xl px-3 py-2 text-sm">{tier.label || "(بدون اسم)"}</span>
-                    <span className="w-11 h-10 rounded-lg shrink-0" style={{ background: tier.color }} />
-                    <button onClick={() => restoreTier(tier.id)} className="text-emerald-400 shrink-0"><Icon name="RefreshCw" size={16} /></button>
-                  </div>
-                ))}
-              </div>
-            )}
+      {tierError && <p className="text-rose-400 text-xs mb-3">{tierError}</p>}
 
-            <label className="flex items-center gap-2 text-xs text-[#D4D4D8] mb-3">
-              <input type="checkbox" checked={hideFromCustomer} onChange={(e) => setHideFromCustomer(e.target.checked)} />
-              إخفاء أسماء التصنيفات عن الزبون في الكاشير (زراير ملونة بس)
-            </label>
+      <p className="text-[11px] text-[#6B7078] mb-3 leading-5">
+        ملحوظة: حذف تصنيف بيخبيه بس من الكاشير وأسعار المحل، وأسعاره القديمة بتفضل متسجلة زي ما هي — ترجّعه في أي وقت من "تصنيفات محذوفة" فوق وهتلاقي أسعاره القديمة رجعت زي ما كانت.
+      </p>
 
-            {tierError && <p className="text-rose-400 text-xs mb-2">{tierError}</p>}
-            {tierSaved && <p className="text-emerald-400 text-xs mb-2 font-bold">✓ اتحفظ</p>}
-            <button onClick={saveTierSettings} className="btn-emerald w-full rounded-xl py-2 text-sm font-bold">حفظ التخصيص</button>
-
-            <p className="text-[11px] text-[#6B7078] mt-3 leading-5">
-              ملحوظة: حذف تصنيف بيخبيه بس من الكاشير وأسعار المحل، وأسعاره القديمة بتفضل متسجلة زي ما هي — ترجّعه في أي وقت من "تصنيفات محذوفة" فوق وهتلاقي أسعاره القديمة رجعت زي ما كانت.
-            </p>
-          </section>
-        )}
+      <div className="flex gap-2">
+        <button onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
       </div>
+    </Modal>
+  );
+}
+
+function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, onDevReset, setView }) {
+  const isAdmin = user.role === "admin";
+  const [openSection, setOpenSection] = useState(null);
+
+  const items = [
+    { key: "password", label: "تغيير كلمة السر", icon: "Lock" },
+    { key: "dev", label: "دخول المطور", icon: "KeyRound" },
+    ...(isAdmin ? [{ key: "tiers", label: "ميزات إضافية (أدمن فقط)", icon: "Settings" }] : []),
+  ];
+
+  return (
+    <div className="shop-root">
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الإعدادات" onNav={setView} />
+      <div className="max-w-lg mx-auto px-4 py-2 fade-up space-y-2 pb-6">
+        {items.map((it) => (
+          <button
+            key={it.key}
+            onClick={() => setOpenSection(it.key)}
+            className="panel rounded-2xl p-4 w-full flex items-center justify-between text-right"
+          >
+            <span className="font-bold text-sm text-white flex items-center gap-2">
+              <Icon name={it.icon} size={16} />
+              {it.label}
+            </span>
+            <Icon name="ChevronLeft" size={16} className="text-[#6B7078]" />
+          </button>
+        ))}
+      </div>
+
+      {openSection === "password" && (
+        <ChangePasswordModal user={user} users={users} setUsers={setUsers} onClose={() => setOpenSection(null)} />
+      )}
+      {openSection === "dev" && (
+        <DevLoginModal onConfirmed={onDevReset} onClose={() => setOpenSection(null)} />
+      )}
+      {openSection === "tiers" && (
+        <TierSettingsModal tierSettings={tierSettings} setTierSettings={setTierSettings} onClose={() => setOpenSection(null)} />
+      )}
     </div>
   );
 }
@@ -3642,7 +4050,7 @@ function AdminScreen({ user, users, setUsers, setView }) {
 
   return (
     <div className="shop-root">
-      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="إدارة المستخدمين" />
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="إدارة المستخدمين" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-4 fade-up space-y-6">
         <section>
           <h2 className="font-bold text-sm text-sky-400 mb-3">طلبات قيد الانتظار ({pending.length})</h2>
@@ -3755,7 +4163,6 @@ function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [lastSeen, setLastSeen] = useState({ prices: 0, reports: 0 });
   const [reminder, setReminder] = useState(null);
-  const [showProfile, setShowProfile] = useState(false);
   const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const remindedDateRef = React.useRef(null);
   const [syncError, setSyncError] = useState(null);
@@ -4021,9 +4428,6 @@ function App() {
           </div>
         </div>
       )}
-      {showProfile && currentUser && (
-        <ProfileModal user={currentUser} users={users} setUsers={setUsers} onClose={() => setShowProfile(false)} onUpdated={(updated) => setCurrentUser(updated)} />
-      )}
       {screen === "login" && (
         <LoginScreen onLogin={handleLogin} goRegister={() => { setAuthError(""); setScreen("register"); }} error={authError} loading={authLoading} />
       )}
@@ -4032,7 +4436,7 @@ function App() {
       )}
       {screen === "pending" && <PendingScreen status={pendingStatus} goLogin={() => setScreen("login")} />}
       {screen === "menu" && currentUser && (
-        <MainMenu user={currentUser} setView={nav} onLogout={handleLogout} hasNew={hasNew} onOpenProfile={() => setShowProfile(true)} onDevReset={performFullReset} />
+        <MainMenu user={currentUser} setView={nav} onLogout={handleLogout} hasNew={hasNew} onDevReset={performFullReset} />
       )}
       {screen === "prices" && currentUser && (
         <PricesScreen
@@ -4050,7 +4454,7 @@ function App() {
       )}
       {screen === "orders" && currentUser && <OrdersScreen user={currentUser} orders={orders} setOrders={setOrders} setView={nav} />}
       {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
-      {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} setView={nav} />}
+      {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} sales={sales} setView={nav} />}
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
       {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} onDevReset={performFullReset} setView={nav} />}
