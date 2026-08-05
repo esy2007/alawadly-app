@@ -478,6 +478,55 @@ function loadCashierInvoices() {
   }
 }
 
+// Keeps a local copy of products/categories/sales on the device, so the shop
+// can keep working (browse prices, ring up sales) even with no connection.
+// Writes still go through the existing offline queue and sync once back online;
+// this only covers the "read" side that the offline queue doesn't handle.
+// Short generated tone (no audio file needed) for a quick confidence cue on
+// success, or a lower warning tone on error.
+function playBeep(type = "success") {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    if (type === "success") {
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.16);
+    } else {
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.26);
+    }
+    osc.onended = () => ctx.close();
+  } catch (e) {
+    // Web Audio unsupported/blocked — silently skip, never block the sale over a sound.
+  }
+}
+
+const DATA_CACHE_PREFIX = "faaroon_cache_";
+
+function saveDataCache(key, data) {
+  try { localStorage.setItem(DATA_CACHE_PREFIX + key, JSON.stringify(data)); } catch {}
+}
+
+function loadDataCache(key) {
+  try {
+    const raw = localStorage.getItem(DATA_CACHE_PREFIX + key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 function normalizeArabic(str) {
@@ -575,7 +624,7 @@ function paymentLabel(o) {
     const via = o.splitTransferMethod === "instapay" ? "انستاباي" : "فودافون كاش";
     return { label: `كاش ${o.cashAmount} + تحويل ${via} ${o.transferAmount}`, color: "#FBBF24" };
   }
-  return { label: "-", color: "#9A9EA6" };
+  return { label: "-", color: "#94A3B8" };
 }
 
 function escapeHtml(str) {
@@ -709,13 +758,13 @@ function tierBase(v) {
 }
 
 // ---------- Small UI atoms ----------
-function TextField({ label, icon, ...props }) {
+function TextField({ label, icon: Icon, ...props }) {
   return (
     <label className="block mb-4 text-right">
-      <span className="block mb-1.5 text-sm font-medium text-[#9A9EA6]">{label}</span>
+      <span className="block mb-1.5 text-sm font-medium text-[#94A3B8]">{label}</span>
       <div className="relative">
         <input {...props} className="field-input w-full rounded-xl px-4 py-2.5 pr-10 text-[15px] transition-colors" />
-        {icon && <Icon name={icon} size={18} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#6B7078]" />}
+        {Icon && <Icon size={18} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#64748B]" />}
       </div>
     </label>
   );
@@ -735,13 +784,23 @@ function StatusStamp({ status }) {
   );
 }
 
+function SkeletonRows({ count = 4, height = 56 }) {
+  return (
+    <div className="space-y-2">
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="skeleton" style={{ height }} />
+      ))}
+    </div>
+  );
+}
+
 function Modal({ title, accent = "#38BDF8", onClose, children }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4 modal-backdrop" onClick={onClose}>
       <div className="panel rounded-2xl w-full max-w-sm p-5 modal-pop max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-bold text-base" style={{ color: accent }}>{title}</h3>
-          <button onClick={onClose} className="text-[#9A9EA6] hover:text-white"><Icon name="X" size={18} /></button>
+          <button onClick={onClose} className="text-[#94A3B8] hover:text-white"><Icon name="X" size={18} /></button>
         </div>
         {children}
       </div>
@@ -761,7 +820,7 @@ function LoginScreen({ onLogin, goRegister, error, loading }) {
             <Icon name="Store" size={30} className="text-white" />
           </div>
           <h1 className="font-extrabold text-2xl text-sky-400 tracking-wide">FaAroon</h1>
-          <p className="text-sm text-[#9A9EA6] mt-1">نظام إدارة أسعار ومبيعات المحل</p>
+          <p className="text-sm text-[#94A3B8] mt-1">نظام إدارة أسعار ومبيعات المحل</p>
         </div>
 
         <div className="panel rounded-2xl p-6">
@@ -796,11 +855,11 @@ function RegisterScreen({ onRegister, goLogin, error, loading }) {
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm fade-up">
-        <button onClick={goLogin} className="flex items-center gap-1 text-sm text-[#9A9EA6] mb-4 hover:text-white">
+        <button onClick={goLogin} className="flex items-center gap-1 text-sm text-[#94A3B8] mb-4 hover:text-white">
           <Icon name="ChevronLeft" size={16} /> رجوع لتسجيل الدخول
         </button>
         <h1 className="font-extrabold text-xl text-sky-400 mb-1">إنشاء حساب جديد</h1>
-        <p className="text-sm text-[#9A9EA6] mb-5">هيتبعت طلبك للأدمن عشان يوافق عليه</p>
+        <p className="text-sm text-[#94A3B8] mb-5">هيتبعت طلبك للأدمن عشان يوافق عليه</p>
 
         <div className="panel rounded-2xl p-6">
           <TextField label="الاسم" icon="User" value={name} onChange={(e) => setName(e.target.value)} placeholder="اسمك بالكامل" />
@@ -831,7 +890,7 @@ function PendingScreen({ status, goLogin }) {
         <div className="panel rounded-2xl p-8">
           <div className="stamp-anim inline-block mb-4"><StatusStamp status={status} /></div>
           <h2 className="font-bold text-lg mb-2 text-white">{isRejected ? "تم رفض طلبك" : "طلبك قيد المراجعة"}</h2>
-          <p className="text-sm text-[#9A9EA6] mb-6">
+          <p className="text-sm text-[#94A3B8] mb-6">
             {isRejected ? "الأدمن رفض طلب انضمامك للمحل. تقدر تتواصل معاه لمعرفة السبب." : "لسه الأدمن ما وافقش على طلبك، حاول تسجيل الدخول تاني بعد شوية."}
           </p>
           <button onClick={goLogin} className="btn-sky rounded-xl px-6 py-2.5 font-bold">رجوع لتسجيل الدخول</button>
@@ -868,12 +927,12 @@ function SideDrawer({ user, onNav, onClose }) {
           {items.map((it) => (
             <div key={it.key}>
               <div className="flex items-center">
-                <button onClick={() => onNav(it.key)} className="flex-1 flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-bold text-[#D4D4D8] hover:bg-white/5 text-right transition-colors">
+                <button onClick={() => onNav(it.key)} className="flex-1 flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-bold text-[#CBD5E1] hover:bg-white/5 text-right transition-colors">
                   <Icon name={it.icon} size={17} />
                   {it.label}
                 </button>
                 {it.key === "cashier" && pendingInvoices.length > 0 && (
-                  <button onClick={() => setCashierExpanded((v) => !v)} className="p-2 text-[#9A9EA6]">
+                  <button onClick={() => setCashierExpanded((v) => !v)} className="p-2 text-[#94A3B8]">
                     <Icon name="ChevronDown" size={14} style={{ transform: cashierExpanded ? "rotate(180deg)" : "none", display: "inline-block", transition: "transform 0.15s" }} />
                   </button>
                 )}
@@ -881,7 +940,7 @@ function SideDrawer({ user, onNav, onClose }) {
               {it.key === "cashier" && cashierExpanded && pendingInvoices.length > 0 && (
                 <div className="pr-8 space-y-1 mb-1">
                   {pendingInvoices.map((inv) => (
-                    <button key={inv.id} onClick={() => onNav("cashier")} className="block w-full text-right text-xs text-[#9A9EA6] py-1.5 hover:text-white">
+                    <button key={inv.id} onClick={() => onNav("cashier")} className="block w-full text-right text-xs text-[#94A3B8] py-1.5 hover:text-white">
                       {inv.customerName || inv.label} — {inv.items.length} صنف لسه ما اتأكدش
                     </button>
                   ))}
@@ -957,16 +1016,16 @@ function ProfileModal({ user, users, setUsers, onClose, onUpdated }) {
   return (
     <Modal title="⚙️ إعدادات الحساب" accent="#38BDF8" onClose={onClose}>
       <label className="block mb-3 text-right">
-        <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">الاسم</span>
+        <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">الاسم</span>
         <input value={name} onChange={(e) => setName(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" />
       </label>
       <label className="block mb-3 text-right">
-        <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">كلمة مرور جديدة (سيبها فاضية لو مش عايز تغيرها)</span>
+        <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">كلمة مرور جديدة (سيبها فاضية لو مش عايز تغيرها)</span>
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" />
       </label>
       {password && (
         <label className="block mb-3 text-right">
-          <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">تأكيد كلمة المرور</span>
+          <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">تأكيد كلمة المرور</span>
           <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" />
         </label>
       )}
@@ -1032,18 +1091,18 @@ function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
               <div className="relative w-11 h-11 rounded-xl flex items-center justify-center shadow-md" style={{ background: it.accent }}>
                 <Icon name={it.icon} size={21} className="text-white" />
                 {(dotRed || dotGreen) && (
-                  <span className="absolute w-3 h-3 rounded-full" style={{ top: -3, left: -3, background: dotRed ? "#F43F5E" : "#34D399", boxShadow: "0 0 0 2px #2A2E37" }} />
+                  <span className="absolute w-3 h-3 rounded-full" style={{ top: -3, left: -3, background: dotRed ? "#F43F5E" : "#34D399", boxShadow: "0 0 0 2px #1E293B" }} />
                 )}
               </div>
               <div className="font-bold text-sm text-white">{it.label}</div>
-              <div className="text-xs text-[#9A9EA6]">{it.desc}</div>
+              <div className="text-xs text-[#94A3B8]">{it.desc}</div>
             </button>
           );
         })}
       </div>
 
       {user.role === "admin" && (
-        <p onClick={handleVersionTap} className="text-center text-[10px] text-[#4B4F58] py-4 select-none cursor-default">
+        <p onClick={handleVersionTap} className="text-center text-[10px] text-[#475569] py-4 select-none cursor-default">
           الإصدار ١.٠
         </p>
       )}
@@ -1106,7 +1165,7 @@ function DevResetModal({ onClose, onConfirmed, startAtConfirm }) {
           <p className="text-sm text-rose-300 mb-3 leading-6">
             الخطوة دي هتمسح كل المنتجات والأوردرات والتحويلات والتصنيفات نهائيًا ومفيش رجوع فيها. حسابات المستخدمين (الأدمن والموظفين) هتفضل زي ما هي.
           </p>
-          <p className="text-xs text-[#9A9EA6] mb-1.5">اكتب "تصفير" للتأكيد</p>
+          <p className="text-xs text-[#94A3B8] mb-1.5">اكتب "تصفير" للتأكيد</p>
           <input
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
@@ -1137,7 +1196,7 @@ function TierPriceEditor({ label, color, rows, setRows }) {
           <div key={r.id} className="flex gap-1.5 items-center">
             <input value={r.price} onChange={(e) => updateRow(r.id, "price", e.target.value)} placeholder="السعر" className="field-input rounded-lg px-2 py-1.5 text-xs text-center w-20 shrink-0" style={{ color }} />
             <div className="flex-1">
-              <span className="block text-[10px] text-[#9A9EA6] mb-0.5">عدد القطع (اختياري)</span>
+              <span className="block text-[10px] text-[#94A3B8] mb-0.5">عدد القطع (اختياري)</span>
               <input value={r.label} onChange={(e) => updateRow(r.id, "label", e.target.value)} placeholder="مثال: من 10 قطع" className="field-input rounded-lg px-2 py-1.5 text-xs w-full" />
             </div>
             {rows.length > 1 && (
@@ -1226,7 +1285,7 @@ function PullToRefresh({ onRefresh }) {
           className="fixed top-0 inset-x-0 z-[100] flex items-start justify-center pointer-events-none"
           style={{ height: refreshing ? 50 : pullDist, transition: refreshing ? "height 0.15s ease" : "none" }}
         >
-          <div className="bg-[#2A2E37] border border-white/10 rounded-full p-2.5 shadow-lg mt-2">
+          <div className="bg-[#1E293B] border border-white/10 rounded-full p-2.5 shadow-lg mt-2">
             <Icon name="Loader2" size={18} className={refreshing ? "text-sky-400 animate-spin" : "text-sky-400"} />
           </div>
         </div>
@@ -1251,7 +1310,7 @@ function BarcodeListEditor({ barcodes, setBarcodes, onScan }) {
   return (
     <div className="mb-3">
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-xs text-[#9A9EA6]">الباركود (اختياري، ممكن أكتر من واحد لنفس المنتج)</span>
+        <span className="text-xs text-[#94A3B8]">الباركود (اختياري، ممكن أكتر من واحد لنفس المنتج)</span>
         <button type="button" onClick={addBlank} className="text-[10px] text-sky-400 font-semibold shrink-0">+ كود تاني</button>
       </div>
       <div className="space-y-1.5">
@@ -1312,7 +1371,7 @@ function BarcodeScannerModal({ onDetected, onClose }) {
       <div className="panel rounded-2xl p-4 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-white text-sm flex items-center gap-1.5"><Icon name="ScanLine" size={16} /> امسح الباركود</h3>
-          <button onClick={onClose}><Icon name="X" size={20} className="text-[#9A9EA6]" /></button>
+          <button onClick={onClose}><Icon name="X" size={20} className="text-[#94A3B8]" /></button>
         </div>
         <div id="barcode-reader-box" className="rounded-xl overflow-hidden bg-black/40 min-h-[200px]" />
         {error && <p className="text-rose-400 text-xs mt-2 text-center">{error}</p>}
@@ -1330,14 +1389,14 @@ function ProductThumb({ product, editable, onPick }) {
         className="w-24 h-24 rounded-2xl overflow-hidden bg-black/30 flex items-center justify-center border border-white/5 cursor-pointer"
         onClick={() => product?.image && setShowLightbox(true)}
       >
-        {product?.image ? <img src={product.image} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={32} className="text-[#4B4F58]" />}
+        {product?.image ? <img src={product.image} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={32} className="text-[#475569]" />}
       </div>
       {editable && (
         <>
           <button
             type="button"
             onClick={() => fileRef.current && fileRef.current.click()}
-            className="absolute -bottom-1.5 -left-1.5 w-7 h-7 rounded-full bg-sky-600 flex items-center justify-center border-2 border-[#2A2E37] cursor-pointer"
+            className="absolute -bottom-1.5 -left-1.5 w-7 h-7 rounded-full bg-sky-600 flex items-center justify-center border-2 border-[#1E293B] cursor-pointer"
           >
             <Icon name="Camera" size={14} className="text-white" />
           </button>
@@ -1449,7 +1508,7 @@ function CategoryCombobox({ categories, setCategories, value, onSelect, allowCre
               </button>
             </div>
           ))}
-          {filtered.length === 0 && !query.trim() && <p className="text-xs text-[#6B7078] text-center py-3">لا يوجد تصنيفات بعد</p>}
+          {filtered.length === 0 && !query.trim() && <p className="text-xs text-[#64748B] text-center py-3">لا يوجد تصنيفات بعد</p>}
           {allowCreate && query.trim() && !exactMatch && (
             <button onMouseDown={(e) => { e.preventDefault(); createCategory(query.trim()); }} className="w-full text-right px-3 py-2 text-sm text-sky-400 hover:bg-black/20 border-t border-white/5">
               + إنشاء تصنيف جديد: "{query.trim()}"
@@ -1471,7 +1530,7 @@ const PAYMENT_METHODS = [
 function PaymentMethodPicker({ value, onChange }) {
   return (
     <>
-      <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">طريقة الدفع</span>
+      <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">طريقة الدفع</span>
       <div className="grid grid-cols-2 gap-2 mb-3">
         {PAYMENT_METHODS.map((m) => (
           <button key={m.key} onClick={() => onChange({ ...value, paymentMethod: m.key })} className={`toggle-pill rounded-xl py-2 text-xs font-bold flex items-center justify-center gap-1 ${value.paymentMethod === m.key ? "active-sky" : ""}`}>
@@ -1481,7 +1540,7 @@ function PaymentMethodPicker({ value, onChange }) {
       </div>
       {value.paymentMethod === "split" && (
         <>
-          <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">التحويل عن طريق</span>
+          <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">التحويل عن طريق</span>
           <div className="flex gap-2 mb-3">
             <button onClick={() => onChange({ ...value, splitTransferMethod: "vodafone_cash" })} className={`toggle-pill flex-1 rounded-xl py-2 text-xs font-bold ${value.splitTransferMethod === "vodafone_cash" ? "active-sky" : ""}`}>فودافون كاش</button>
             <button onClick={() => onChange({ ...value, splitTransferMethod: "instapay" })} className={`toggle-pill flex-1 rounded-xl py-2 text-xs font-bold ${value.splitTransferMethod === "instapay" ? "active-sky" : ""}`}>انستاباي</button>
@@ -1551,7 +1610,7 @@ function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSetting
 
   return (
     <Modal title="فاتورة جديدة" accent="#10B981" onClose={onClose}>
-      <p className="text-xs text-[#9A9EA6] mb-1.5">اسم الزبون (اختياري)</p>
+      <p className="text-xs text-[#94A3B8] mb-1.5">اسم الزبون (اختياري)</p>
       <input
         value={customerName}
         onChange={(e) => handleNameChange(e.target.value)}
@@ -1673,7 +1732,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
     const isRed = warning.type === "red";
     return (
       <Modal title={isRed ? "⚠️ أقل من أرخص سعر متاح للمنتج ده!" : "⚠️ أقل من السعر المحدد للفاتورة"} accent={isRed ? "#EF4444" : "#FBBF24"} onClose={() => setWarning(null)}>
-        <p className="text-sm text-[#D4D4D8] mb-4">
+        <p className="text-sm text-[#CBD5E1] mb-4">
           السعر اللي كتبته (<span className="font-bold tabular-nums">{warning.price}</span>) أقل من {isRed ? "أرخص سعر متاح للمنتج ده" : "السعر المحدد لنوع الفاتورة دي"}. تحب تكمل بيه؟
         </p>
         <div className="flex gap-2 mb-3">
@@ -1682,7 +1741,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
         </div>
         <button
           onClick={() => { onSuppressWarning(isRed ? "red" : "yellow"); proceedAdd(warning.price, warning.q); }}
-          className="w-full text-xs text-[#9A9EA6] hover:underline"
+          className="w-full text-xs text-[#94A3B8] hover:underline"
         >
           عدم التحذير تاني في الفاتورة دي
         </button>
@@ -1704,13 +1763,13 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
         ))}
       </div>
 
-      <p className="text-xs text-[#9A9EA6] mb-1.5">الكمية</p>
+      <p className="text-xs text-[#94A3B8] mb-1.5">الكمية</p>
       <button onClick={() => setNumPadTarget("qty")} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4 text-center block font-bold tabular-nums">
         {qty || "0"}
       </button>
 
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-xs text-[#9A9EA6]">السعر</span>
+        <span className="text-xs text-[#94A3B8]">السعر</span>
         {!priceOverridden && (
           <button onClick={() => { setManualPrice(displayPrice); setPriceOverridden(true); }} className="text-[11px] text-sky-400 font-semibold">تغيير</button>
         )}
@@ -1769,7 +1828,7 @@ function makeEmptyInvoice(tierKey, label, customerName, invoiceNumber) {
   return { id: uid(), label, invoiceNumber, tierKey, customerName: customerName || "", items: [], suppressYellow: false, suppressRed: false };
 }
 
-function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, setView }) {
+function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, setView }) {
   const [invoices, setInvoices] = useState(() => (loadCashierInvoices()?.invoices) || []);
   const [activeId, setActiveId] = useState(() => {
     const saved = loadCashierInvoices();
@@ -1960,6 +2019,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     const err = validatePaymentMethod(confirmForm, total);
     if (err) {
       setConfirmError(err);
+      playBeep("error");
       return;
     }
     const isSplit = confirmForm.paymentMethod === "split";
@@ -1979,6 +2039,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       createdAt: Date.now(),
     };
     setSales((s) => [...s, sale]);
+    playBeep("success");
     salesStore.upsert(sale);
     setLastSale(sale);
     const closedId = activeId;
@@ -1995,9 +2056,14 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     <div className="shop-root">
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الكاشير" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-6">
+        {usingCachedProducts && (
+          <div className="bg-amber-950/40 border border-amber-800 rounded-xl px-3 py-2 mb-3 text-xs text-amber-300 font-bold text-center">
+            📴 مفيش اتصال بالنت — الأسعار دي آخر نسخة محفوظة على الفون
+          </div>
+        )}
         {productsLoading && products.length === 0 && (
-          <div className="flex items-center justify-center gap-2 py-10 text-[#9A9EA6] text-sm">
-            <Icon name="Loader2" size={18} className="animate-spin" /> بيحمّل المنتجات...
+          <div className="mb-4">
+            <SkeletonRows count={5} height={60} />
           </div>
         )}
 
@@ -2017,7 +2083,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
         </div>
 
         {!activeInvoice && (
-          <p className="text-center text-[#6B7078] py-10 text-sm">افتح فاتورة جديدة عشان تبدأ البيع</p>
+          <p className="text-center text-[#64748B] py-10 text-sm">افتح فاتورة جديدة عشان تبدأ البيع</p>
         )}
 
         {activeInvoice && (
@@ -2036,7 +2102,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
             {!query && topProducts.length > 0 && (
               <div className="mb-4">
-                <p className="text-xs text-[#9A9EA6] mb-2">الأكتر مبيعًا</p>
+                <p className="text-xs text-[#94A3B8] mb-2">الأكتر مبيعًا</p>
                 <div className="flex flex-wrap gap-2">
                   {topProducts.map((p) => (
                     <button
@@ -2047,7 +2113,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
                       {imageCache[p.id] ? (
                         <img src={imageCache[p.id]} alt="" className="w-4 h-4 rounded-full object-cover" />
                       ) : (
-                        <Icon name="Store" size={12} className="text-[#6B7078]" />
+                        <Icon name="Store" size={12} className="text-[#64748B]" />
                       )}
                       {p.name}
                     </button>
@@ -2062,7 +2128,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
                   <button key={p.id} onClick={() => { setPickerViaScan(false); setPickerProduct(p); }} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
                     <span className="flex items-center gap-2.5">
                       <span className="w-9 h-9 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
-                        {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={16} className="text-[#4B4F58]" />}
+                        {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={16} className="text-[#475569]" />}
                       </span>
                       <span className="font-bold text-sm text-white">{p.name}</span>
                     </span>
@@ -2073,13 +2139,13 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             )}
 
             <h3 className="font-bold text-sm text-white mb-2">السلة</h3>
-            {activeInvoice.items.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
+            {activeInvoice.items.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
             <div className="space-y-2 mb-4">
               {activeInvoice.items.map((it) => (
                 <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between gap-2">
                   <button onClick={() => setEditingItem(it)} className="text-right flex-1 min-w-0">
                     <p className="font-bold text-sm text-white truncate">{it.productName}</p>
-                    <p className="text-xs text-[#9A9EA6]">{it.unitPrice} × {it.qty}</p>
+                    <p className="text-xs text-[#94A3B8]">{it.unitPrice} × {it.qty}</p>
                   </button>
                   <div className="flex items-center gap-1 shrink-0">
                     <button onClick={() => adjustQty(it.id, -1)} className="icon-btn rounded-lg w-7 h-7 flex items-center justify-center font-bold text-sm">−</button>
@@ -2094,7 +2160,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
             {activeInvoice.items.length > 0 && (
               <div className="panel rounded-2xl p-4 flex items-center justify-between mb-4">
-                <span className="text-sm text-[#9A9EA6]">الإجمالي</span>
+                <span className="text-sm text-[#94A3B8]">الإجمالي</span>
                 <span className="font-bold text-xl text-sky-400 tabular-nums">{total}</span>
               </div>
             )}
@@ -2149,7 +2215,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         {mergePrompt && (
           <Modal title="المنتج ده متسجل بالفعل" accent="#0EA5E9" onClose={cancelMerge}>
-            <p className="text-sm text-[#D4D4D8] mb-4">
+            <p className="text-sm text-[#CBD5E1] mb-4">
               "{mergePrompt.payload.productName}" موجود بالفعل في الفاتورة دي بنفس السعر (الكمية الحالية: {mergePrompt.existingItem.qty}). عايز تزوّد الكمية عليه؟
             </p>
             <div className="flex gap-2">
@@ -2191,7 +2257,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         {cancelPrompt && (
           <Modal title="إلغاء الفاتورة" accent="#EF4444" onClose={() => setCancelPrompt(null)}>
-            <p className="text-sm text-[#D4D4D8] mb-4">هتتمسح الفاتورة دي بكل اللي فيها ومش هتقدر ترجعها. متأكد؟</p>
+            <p className="text-sm text-[#CBD5E1] mb-4">هتتمسح الفاتورة دي بكل اللي فيها ومش هتقدر ترجعها. متأكد؟</p>
             <div className="flex gap-2">
               <button onClick={() => closeInvoice(cancelPrompt)} className="flex-1 rounded-xl py-2 text-sm font-bold bg-rose-600 text-white">أيوه، امسحها</button>
               <button onClick={() => setCancelPrompt(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">رجوع</button>
@@ -2210,7 +2276,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         {lastSale && (
           <Modal title="تم البيع بنجاح" accent="#34D399" onClose={() => setLastSale(null)}>
-            <p className="text-sm text-[#D4D4D8] mb-4">الإجمالي: <span className="font-bold text-emerald-400 tabular-nums">{lastSale.total}</span></p>
+            <p className="text-sm text-[#CBD5E1] mb-4">الإجمالي: <span className="font-bold text-emerald-400 tabular-nums">{lastSale.total}</span></p>
             <button onClick={() => printSaleReceipt(lastSale)} className="btn-sky w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-2">
               <Icon name="Printer" size={16} /> طباعة الفاتورة
             </button>
@@ -2237,7 +2303,7 @@ function makeEmptyNewProduct(tiers) {
   };
 }
 
-function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, tierSettings, setView }) {
+function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, tierSettings, usingCachedProducts, setUsingCachedProducts, setView }) {
   const canEditPrices = user.role === "admin" || !!user.permissions?.editPrices;
   const canManageProducts = user.role === "admin" || !!user.permissions?.manageProducts;
   const canDeleteProducts = user.role === "admin" || !!user.permissions?.deleteProducts;
@@ -2378,7 +2444,11 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
   const handleRefresh = async () => {
     const fresh = await productsStore.loadAll();
-    if (fresh) setProducts(fresh);
+    if (fresh) {
+      setProducts(fresh);
+      saveDataCache("products", fresh);
+      setUsingCachedProducts(false);
+    }
     return !!fresh;
   };
 
@@ -2571,6 +2641,11 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="أسعار المحل" onNav={setView} />
 
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
+        {usingCachedProducts && (
+          <div className="bg-amber-950/40 border border-amber-800 rounded-xl px-3 py-2 mb-3 text-xs text-amber-300 font-bold text-center">
+            📴 مفيش اتصال بالنت — البيانات دي آخر نسخة محفوظة على الفون
+          </div>
+        )}
         {canSeeReportButton && (
           <div className="flex gap-2 mb-3">
             <a href={whatsappHref} target="_blank" rel="noopener noreferrer" onClick={handleSendReportClick} className="btn-whatsapp flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 no-underline">
@@ -2584,12 +2659,12 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
             )}
           </div>
         )}
-        {toast && <div className="toast-in text-xs text-center text-[#D4D4D8] bg-black/30 border border-white/10 rounded-xl px-3 py-2 mb-3">{toast}</div>}
+        {toast && <div className="toast-in text-xs text-center text-[#CBD5E1] bg-black/30 border border-white/10 rounded-xl px-3 py-2 mb-3">{toast}</div>}
 
         <div className="flex gap-2 mb-3">
           <div className="relative flex-1">
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن منتج... (عربي أو English)" className="field-input w-full rounded-xl px-4 py-2.5 pr-10 text-[15px]" />
-            <Icon name="Search" size={18} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#6B7078]" />
+            <Icon name="Search" size={18} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#64748B]" />
           </div>
           <button onClick={() => setScannerTarget({ mode: "lookup" })} title="امسح الباركود" className="icon-btn rounded-xl px-3">
             <Icon name="ScanLine" size={18} />
@@ -2599,7 +2674,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
         {isAdmin && legacyImageProducts.length > 0 && (
           <div className="panel rounded-xl p-3 mb-3 border border-amber-500/30 bg-amber-500/5">
             <p className="text-xs text-amber-300 font-bold mb-1.5">تحسين الأداء متاح</p>
-            <p className="text-xs text-[#D4D4D8] mb-2">
+            <p className="text-xs text-[#CBD5E1] mb-2">
               فيه {legacyImageProducts.length} منتج لسه صورهم متخزنة بالطريقة القديمة (بتخلي التطبيق يفتح أبطأ). ترحيلهم مرة واحدة بس هيخلي التطبيق يفتح أسرع بكتير من بعدها.
             </p>
             {migrating ? (
@@ -2612,7 +2687,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         {(categories.length > 0 || isAdmin) && (
           <div className="mb-3 flex items-center gap-2">
-            <Icon name="Tag" size={16} className="text-[#6B7078] shrink-0" />
+            <Icon name="Tag" size={16} className="text-[#64748B] shrink-0" />
             <div className="flex-1">
               <CategoryCombobox
                 categories={categories}
@@ -2632,12 +2707,10 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         <div className="space-y-3 pb-4">
           {productsLoading && products.length === 0 && (
-            <div className="flex items-center justify-center gap-2 py-10 text-[#9A9EA6] text-sm">
-              <Icon name="Loader2" size={18} className="animate-spin" /> بيحمّل المنتجات...
-            </div>
+            <SkeletonRows count={6} height={110} />
           )}
-          {!productsLoading && products.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لا يوجد منتجات مضافة بعد</p>}
-          {products.length > 0 && filteredProducts.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">مفيش نتائج تطابق بحثك</p>}
+          {!productsLoading && products.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لا يوجد منتجات مضافة بعد</p>}
+          {products.length > 0 && filteredProducts.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">مفيش نتائج تطابق بحثك</p>}
 
           {visibleProducts.map((p) => {
             const editing = editingId === p.id;
@@ -2669,12 +2742,12 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
                     <div className="grid gap-1.5 text-center text-[11px]" style={{ gridTemplateColumns: `repeat(${activeTiers(tierSettings).length}, 1fr)` }}>
                       {activeTiers(tierSettings).map((tier) => (
                         <div key={tier.id} className="price-chip">
-                          <span className="block text-[#9A9EA6] mb-1">{tier.label}</span>
+                          <span className="block text-[#94A3B8] mb-1">{tier.label}</span>
                           <div className="space-y-1">
                             {tierRows(p[tier.id]).map((r, i) => (
                               <div key={i}>
                                 <span className="font-bold tabular-nums" style={{ color: tier.color }}>{r.price}</span>
-                                {(r.label || i > 0) && <div className="text-xs font-bold text-[#D4D4D8] leading-tight mt-0.5">{r.label || "سعر تاني"}</div>}
+                                {(r.label || i > 0) && <div className="text-xs font-bold text-[#CBD5E1] leading-tight mt-0.5">{r.label || "سعر تاني"}</div>}
                               </div>
                             ))}
                           </div>
@@ -2697,7 +2770,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
                 )}
 
                 {!editing && isAdmin && p.costPrice != null && (
-                  <p className="text-[10px] text-[#6B7078] mt-1.5 flex items-center gap-1"><Icon name="Wallet" size={10} /> سعر الشراء: {p.costPrice}</p>
+                  <p className="text-[10px] text-[#64748B] mt-1.5 flex items-center gap-1"><Icon name="Wallet" size={10} /> سعر الشراء: {p.costPrice}</p>
                 )}
 
                 {editing && editError && <p className="text-xs text-rose-400 mt-2 flex items-center gap-1"><Icon name="AlertCircle" size={12} /> {editError}</p>}
@@ -2750,7 +2823,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
           <Modal title="➕ إضافة منتج جديد" accent="#34D399" onClose={() => setShowAdd(false)}>
             <div className="flex items-center gap-3 mb-4">
               <ProductThumb product={{ image: newProd.image }} editable onPick={pickNewProductImage} />
-              <span className="text-xs text-[#9A9EA6]">اضغط على الأيقونة لإضافة صورة المنتج (اختياري)</span>
+              <span className="text-xs text-[#94A3B8]">اضغط على الأيقونة لإضافة صورة المنتج (اختياري)</span>
             </div>
             <input placeholder="اسم المنتج" value={newProd.name} onChange={(e) => setNewProd({ ...newProd, name: e.target.value })} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
 
@@ -2769,7 +2842,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
             </div>
 
             <div className="mb-3">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">تصنيف المنتج (اختياري)</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">تصنيف المنتج (اختياري)</span>
               <CategoryCombobox
                 categories={categories}
                 setCategories={setCategories}
@@ -2782,7 +2855,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
             {isAdmin && (
               <label className="block mb-3 text-right">
-                <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6] flex items-center gap-1"><Icon name="Wallet" size={12} /> سعر الشراء (يظهر لك بس، اختياري)</span>
+                <span className="block mb-1.5 text-xs font-medium text-[#94A3B8] flex items-center gap-1"><Icon name="Wallet" size={12} /> سعر الشراء (يظهر لك بس، اختياري)</span>
                 <input value={newProd.costPrice} onChange={(e) => setNewProd({ ...newProd, costPrice: e.target.value })} className="field-input w-full rounded-xl px-3 py-2 text-sm text-center" placeholder="تكلفة الشراء" />
               </label>
             )}
@@ -2797,7 +2870,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         {duplicateMatch && (
           <Modal title="⚠️ فيه منتج بنفس الاسم" accent="#FBBF24" onClose={() => setDuplicateMatch(null)}>
-            <p className="text-sm text-[#D4D4D8] mb-4">
+            <p className="text-sm text-[#CBD5E1] mb-4">
               فيه منتج محفوظ عنده نفس الاسم أو اسم قريب جدًا منه: <span className="font-bold text-white">{duplicateMatch.name}</span>. تحب تستبدل بياناته بالأسعار الجديدة اللي كتبتها، ولا تلغي؟
             </p>
             <div className="flex gap-2">
@@ -2809,7 +2882,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         {outOfStockProduct && (
           <Modal title="المنتج خلص فين؟" accent="#F59E0B" onClose={() => setOutOfStockProduct(null)}>
-            <p className="text-sm text-[#D4D4D8] mb-4">
+            <p className="text-sm text-[#CBD5E1] mb-4">
               <span className="font-bold text-white">{outOfStockProduct.name}</span> — اختار الفرع اللي المنتج خلص فيه، هيتبعت للأدمن على طول.
             </p>
             <div className="flex gap-2">
@@ -2824,7 +2897,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         {showMissingProduct && (
           <Modal title="منتج مش موجود في القايمة" accent="#A855F7" onClose={() => { setShowMissingProduct(false); setMissingProductName(""); }}>
-            <p className="text-sm text-[#D4D4D8] mb-3">اكتب اسم أو وصف المنتج اللي الزبون سأل عنه، هيتبعت للأدمن.</p>
+            <p className="text-sm text-[#CBD5E1] mb-3">اكتب اسم أو وصف المنتج اللي الزبون سأل عنه، هيتبعت للأدمن.</p>
             <input
               value={missingProductName}
               onChange={(e) => setMissingProductName(e.target.value)}
@@ -2839,7 +2912,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         {notFoundBarcode && (
           <Modal title="مفيش منتج بالباركود ده" accent="#FBBF24" onClose={() => setNotFoundBarcode(null)}>
-            <p className="text-sm text-[#D4D4D8] mb-4">
+            <p className="text-sm text-[#CBD5E1] mb-4">
               الباركود <span className="font-bold text-white">{notFoundBarcode}</span> مش متسجل لأي منتج. تحب تضيفه كمنتج جديد بالباركود ده؟
             </p>
             <div className="flex gap-2">
@@ -2851,7 +2924,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         {showClearConfirm && (
           <Modal title="📋 تم فتح واتساب" accent="#25D366" onClose={() => setShowClearConfirm(false)}>
-            <p className="text-sm text-[#D4D4D8] mb-4">اختار جروب الموظفين من واتساب وابعت الرسالة اللي اتفتحت. تحب تصفّر عداد التعديلات دلوقتي؟</p>
+            <p className="text-sm text-[#CBD5E1] mb-4">اختار جروب الموظفين من واتساب وابعت الرسالة اللي اتفتحت. تحب تصفّر عداد التعديلات دلوقتي؟</p>
             <div className="flex gap-2">
               <button onClick={() => { clearChangeLog(); setShowClearConfirm(false); }} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">تصفير العداد</button>
               <button onClick={() => setShowClearConfirm(false)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">سيبه زي ما هو</button>
@@ -2861,7 +2934,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
         {showManualReset && (
           <Modal title="⚠️ تصفير عداد التعديلات" accent="#FB7185" onClose={() => setShowManualReset(false)}>
-            <p className="text-sm text-[#D4D4D8] mb-4">هيتصفّر عدد التعديلات المسجلة دلوقتي ({changedToday.length}) من غير ما تتبعت أي رسالة. متأكد؟</p>
+            <p className="text-sm text-[#CBD5E1] mb-4">هيتصفّر عدد التعديلات المسجلة دلوقتي ({changedToday.length}) من غير ما تتبعت أي رسالة. متأكد؟</p>
             <div className="flex gap-2">
               <button onClick={() => { clearChangeLog(); setShowManualReset(false); }} className="btn-rose flex-1 rounded-xl py-2 text-sm font-bold">أيوه، صفّر العداد</button>
               <button onClick={() => setShowManualReset(false)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">لأ، رجّعني</button>
@@ -3005,22 +3078,22 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
         </button>
 
         <div className="space-y-3 pb-6">
-          {visibleOrders.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لا يوجد أوردرات مسجلة بعد</p>}
+          {visibleOrders.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لا يوجد أوردرات مسجلة بعد</p>}
           {visibleOrders.map((o) => {
             const pay = paymentLabel(o);
             return (
               <div key={o.id} className="panel p-4 rounded-2xl">
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#9A9EA6]" /> {o.repName}</h3>
-                    <p className="text-xs text-[#9A9EA6] flex items-center gap-1 mt-0.5">
+                    <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#94A3B8]" /> {o.repName}</h3>
+                    <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5">
                       <Icon name="MapPin" size={12} /> {o.area}{o.dispatchLocation ? ` · من: ${o.dispatchLocation}` : ""}
                     </p>
                   </div>
                   <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
                 </div>
 
-                {o.notes && <p className="text-xs text-[#D4D4D8] bg-black/15 rounded-lg px-2.5 py-1.5 mb-2">📝 {o.notes}</p>}
+                {o.notes && <p className="text-xs text-[#CBD5E1] bg-black/15 rounded-lg px-2.5 py-1.5 mb-2">📝 {o.notes}</p>}
 
                 {o.invoiceImage && (
                   <InvoiceThumb src={o.invoiceImage} className="w-14 h-14 rounded-lg object-cover border border-white/10 mb-2" />
@@ -3029,7 +3102,7 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
                 <div className="flex items-center justify-between pt-2 border-t border-white/5">
                   <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
                   <span className="text-xs font-bold text-amber-300">
-                    {o.employeeName} <span className="text-[#7C818C] font-normal">· {new Date(o.createdAt).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}</span>
+                    {o.employeeName} <span className="text-[#64748B] font-normal">· {new Date(o.createdAt).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}</span>
                   </span>
                 </div>
 
@@ -3051,24 +3124,24 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
         {showAdd && (
           <Modal title="➕ أوردر جديد" accent="#FBBF24" onClose={() => setShowAdd(false)}>
             <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">اسم الموظف</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">اسم الموظف</span>
               <div className="field-input w-full rounded-xl px-4 py-2.5 text-sm opacity-70">{user.name}</div>
             </label>
 
             <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">اسم المندوب</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">اسم المندوب</span>
               <input list="rep-names" value={form.repName} onChange={(e) => setForm({ ...form, repName: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" placeholder="اسم المندوب" />
               <datalist id="rep-names">{repNameOptions.map((n) => <option value={n} key={n} />)}</datalist>
             </label>
 
             <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">المنطقة أو اسم المحل</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">المنطقة أو اسم المحل</span>
               <input list="area-names" value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" placeholder="المنطقة أو اسم المحل" />
               <datalist id="area-names">{areaOptions.map((n) => <option value={n} key={n} />)}</datalist>
             </label>
 
             <div className="mb-3">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">مكان خروج الأوردر (اختياري)</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">مكان خروج الأوردر (اختياري)</span>
               <div className="flex gap-2">
                 {DISPATCH_LOCATIONS.map((loc) => (
                   <button key={loc} onClick={() => setForm({ ...form, dispatchLocation: form.dispatchLocation === loc ? "" : loc })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.dispatchLocation === loc ? "active-sky" : ""}`}>
@@ -3079,17 +3152,17 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
             </div>
 
             <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">السعر</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">السعر</span>
               <input value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm text-center" placeholder="السعر الكلي" />
             </label>
 
             <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">ملاحظات (اختياري)</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">ملاحظات (اختياري)</span>
               <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm resize-none" rows={2} placeholder="أي ملاحظات على الأوردر" />
             </label>
 
             <div className="mb-3">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">صورة الفاتورة (اختياري)</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">صورة الفاتورة (اختياري)</span>
               {form.invoiceImage ? (
                 <div className="relative inline-block">
                   <img src={form.invoiceImage} className="w-20 h-20 rounded-xl object-cover border border-white/10" alt="فاتورة" />
@@ -3105,7 +3178,7 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
               <input ref={invoiceFileRef} type="file" accept="image/*" className="hidden" onChange={(e) => { if (e.target.files && e.target.files[0]) pickInvoiceImage(e.target.files[0]); e.target.value = ""; }} />
             </div>
 
-            <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">دفع ولا لأ؟</span>
+            <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">دفع ولا لأ؟</span>
             <div className="flex gap-2 mb-3">
               <button onClick={() => setForm({ ...form, paid: true })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.paid === true ? "active-emerald" : ""}`}>مدفوع</button>
               <button onClick={() => setForm({ ...form, paid: false, paymentMethod: null })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.paid === false ? "active-rose" : ""}`}>غير مدفوع</button>
@@ -3230,7 +3303,7 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
         </button>
 
         <div className="space-y-3 pb-6">
-          {transfers.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لا يوجد تحويلات مسجلة بعد</p>}
+          {transfers.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لا يوجد تحويلات مسجلة بعد</p>}
           {transfers.map((t) => {
             const pay = paymentLabel(t);
             return (
@@ -3241,7 +3314,7 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-white/5">
                   <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
-                  <span className="text-xs font-bold text-amber-300">{t.createdBy} <span className="text-[#7C818C] font-normal">· {new Date(t.createdAt).toLocaleString("ar-EG")}</span></span>
+                  <span className="text-xs font-bold text-amber-300">{t.createdBy} <span className="text-[#64748B] font-normal">· {new Date(t.createdAt).toLocaleString("ar-EG")}</span></span>
                 </div>
                 {t.paid && t.confirmedBy && (
                   <p className="text-[11px] text-emerald-400 mt-2 flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {t.confirmedBy}</p>
@@ -3259,12 +3332,12 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
         {showAdd && (
           <Modal title="💸 تحويل جديد" accent="#A855F7" onClose={() => setShowAdd(false)}>
             <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">اسم الشخص</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">اسم الشخص</span>
               <input list="transfer-names" value={personName} onChange={(e) => setPersonName(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" placeholder="اسم الشخص" />
               <datalist id="transfer-names">{nameOptions.map((n) => <option value={n} key={n} />)}</datalist>
             </label>
             <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#9A9EA6]">المبلغ</span>
+              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">المبلغ</span>
               <input value={amount} onChange={(e) => setAmount(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm text-center" placeholder="المبلغ" />
             </label>
             {error && <p className="text-xs text-rose-400 mb-3 flex items-center gap-1"><Icon name="AlertCircle" size={12} /> {error}</p>}
@@ -3316,17 +3389,17 @@ function ReportsScreen({ user, orders, sales, setView }) {
           <>
             <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
               <div>
-                <p className="text-xs text-[#9A9EA6]">أوردرات مؤكدة الدفع</p>
+                <p className="text-xs text-[#94A3B8]">أوردرات مؤكدة الدفع</p>
                 <p className="text-2xl font-bold text-emerald-400">{paidOrders.length}</p>
               </div>
               <div className="text-left">
-                <p className="text-xs text-[#9A9EA6]">إجمالي المبيعات</p>
+                <p className="text-xs text-[#94A3B8]">إجمالي المبيعات</p>
                 <p className="text-2xl font-bold text-sky-400 tabular-nums">{ordersTotal}</p>
               </div>
             </div>
 
             <div className="space-y-3 pb-6">
-              {paidOrders.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لسه مفيش أوردرات مؤكدة الدفع</p>}
+              {paidOrders.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لسه مفيش أوردرات مؤكدة الدفع</p>}
               {paidOrders.map((o) => {
                 const pay = paymentLabel(o);
                 const expanded = expandedId === o.id;
@@ -3334,14 +3407,14 @@ function ReportsScreen({ user, orders, sales, setView }) {
                   <div key={o.id} className="panel p-4 rounded-2xl">
                     <div className="flex items-start justify-between mb-2">
                       <div>
-                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#9A9EA6]" /> {o.repName}</h3>
-                        <p className="text-xs text-[#9A9EA6] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.area}</p>
+                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#94A3B8]" /> {o.repName}</h3>
+                        <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.area}</p>
                       </div>
                       <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-white/5">
                       <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
-                      <span className="text-xs font-bold text-amber-300">{o.employeeName} <span className="text-[#7C818C] font-normal">· {new Date(o.createdAt).toLocaleDateString("ar-EG")}</span></span>
+                      <span className="text-xs font-bold text-amber-300">{o.employeeName} <span className="text-[#64748B] font-normal">· {new Date(o.createdAt).toLocaleDateString("ar-EG")}</span></span>
                     </div>
                     {o.confirmedBy && (
                       <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
@@ -3350,24 +3423,24 @@ function ReportsScreen({ user, orders, sales, setView }) {
                     {expanded && (
                       <div className="mt-3 pt-3 border-t border-white/5 space-y-2 text-xs">
                         {o.dispatchLocation && (
-                          <p className="text-[#D4D4D8]"><span className="text-[#9A9EA6]">مكان الخروج: </span>{o.dispatchLocation}</p>
+                          <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">مكان الخروج: </span>{o.dispatchLocation}</p>
                         )}
                         {o.notes && (
-                          <p className="text-[#D4D4D8] bg-black/15 rounded-lg px-2.5 py-1.5">📝 {o.notes}</p>
+                          <p className="text-[#CBD5E1] bg-black/15 rounded-lg px-2.5 py-1.5">📝 {o.notes}</p>
                         )}
                         {o.paymentMethod === "split" && (
-                          <p className="text-[#D4D4D8]">
-                            <span className="text-[#9A9EA6]">تفاصيل الدفع: </span>
+                          <p className="text-[#CBD5E1]">
+                            <span className="text-[#94A3B8]">تفاصيل الدفع: </span>
                             كاش {o.cashAmount} + تحويل {o.splitTransferMethod === "instapay" ? "انستاباي" : "فودافون كاش"} {o.transferAmount}
                           </p>
                         )}
-                        <p className="text-[#D4D4D8]">
-                          <span className="text-[#9A9EA6]">وقت الإنشاء: </span>
+                        <p className="text-[#CBD5E1]">
+                          <span className="text-[#94A3B8]">وقت الإنشاء: </span>
                           {new Date(o.createdAt).toLocaleString("ar-EG")}
                         </p>
                         {o.confirmedAt && (
-                          <p className="text-[#D4D4D8]">
-                            <span className="text-[#9A9EA6]">وقت تأكيد الدفع: </span>
+                          <p className="text-[#CBD5E1]">
+                            <span className="text-[#94A3B8]">وقت تأكيد الدفع: </span>
                             {new Date(o.confirmedAt).toLocaleString("ar-EG")}
                           </p>
                         )}
@@ -3394,17 +3467,17 @@ function ReportsScreen({ user, orders, sales, setView }) {
           <>
             <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
               <div>
-                <p className="text-xs text-[#9A9EA6]">فواتير الكاشير</p>
+                <p className="text-xs text-[#94A3B8]">فواتير الكاشير</p>
                 <p className="text-2xl font-bold text-emerald-400">{sortedSales.length}</p>
               </div>
               <div className="text-left">
-                <p className="text-xs text-[#9A9EA6]">إجمالي المبيعات</p>
+                <p className="text-xs text-[#94A3B8]">إجمالي المبيعات</p>
                 <p className="text-2xl font-bold text-sky-400 tabular-nums">{salesTotal}</p>
               </div>
             </div>
 
             <div className="space-y-3 pb-6">
-              {sortedSales.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لسه مفيش فواتير كاشير</p>}
+              {sortedSales.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لسه مفيش فواتير كاشير</p>}
               {sortedSales.map((s) => {
                 const pay = paymentLabel(s);
                 const expanded = expandedId === s.id;
@@ -3412,26 +3485,26 @@ function ReportsScreen({ user, orders, sales, setView }) {
                   <div key={s.id} className="panel p-4 rounded-2xl">
                     <div className="flex items-start justify-between mb-2">
                       <div>
-                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Wallet" size={15} className="text-[#9A9EA6]" /> {s.customerName || "بدون اسم زبون"}</h3>
-                        <p className="text-xs text-[#9A9EA6] mt-0.5">فاتورة #{s.invoiceNumber ?? "?"} · {s.items.length} صنف</p>
+                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Wallet" size={15} className="text-[#94A3B8]" /> {s.customerName || "بدون اسم زبون"}</h3>
+                        <p className="text-xs text-[#94A3B8] mt-0.5">فاتورة #{s.invoiceNumber ?? "?"} · {s.items.length} صنف</p>
                       </div>
                       <span className="font-bold text-lg text-sky-400 tabular-nums">{s.total}</span>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-white/5">
                       <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
-                      <span className="text-xs font-bold text-amber-300">{s.employeeName} <span className="text-[#7C818C] font-normal">· {new Date(s.createdAt).toLocaleDateString("ar-EG")}</span></span>
+                      <span className="text-xs font-bold text-amber-300">{s.employeeName} <span className="text-[#64748B] font-normal">· {new Date(s.createdAt).toLocaleDateString("ar-EG")}</span></span>
                     </div>
 
                     {expanded && (
                       <div className="mt-3 pt-3 border-t border-white/5 space-y-1.5 text-xs">
                         {s.items.map((it, i) => (
-                          <div key={i} className="flex items-center justify-between text-[#D4D4D8]">
+                          <div key={i} className="flex items-center justify-between text-[#CBD5E1]">
                             <span>{it.productName} × {it.qty}</span>
                             <span className="tabular-nums">{it.lineTotal}</span>
                           </div>
                         ))}
-                        <p className="text-[#D4D4D8] pt-1.5 border-t border-white/5">
-                          <span className="text-[#9A9EA6]">وقت البيع: </span>
+                        <p className="text-[#CBD5E1] pt-1.5 border-t border-white/5">
+                          <span className="text-[#94A3B8]">وقت البيع: </span>
                           {new Date(s.createdAt).toLocaleString("ar-EG")}
                         </p>
                       </div>
@@ -3474,7 +3547,7 @@ function DayEditModal({ dateStr, existing, onSave, onClose }) {
 
   return (
     <Modal title={dayLabel} accent="#0EA5E9" onClose={onClose}>
-      <p className="text-xs text-[#9A9EA6] mb-2">الحضور</p>
+      <p className="text-xs text-[#94A3B8] mb-2">الحضور</p>
       <div className="grid grid-cols-2 gap-2 mb-4">
         {Object.entries(ATTENDANCE_STATUS).map(([key, s]) => (
           <button
@@ -3508,9 +3581,9 @@ function WithdrawalEntryModal({ onSave, onClose }) {
 
   return (
     <Modal title="تسجيل سحب فلوس" accent="#FBBF24" onClose={onClose}>
-      <p className="text-xs text-[#9A9EA6] mb-1.5">المبلغ</p>
+      <p className="text-xs text-[#94A3B8] mb-1.5">المبلغ</p>
       <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="المبلغ" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
-      <p className="text-xs text-[#9A9EA6] mb-1.5">ملاحظة (اختياري، تبقى ليك بس)</p>
+      <p className="text-xs text-[#94A3B8] mb-1.5">ملاحظة (اختياري، تبقى ليك بس)</p>
       <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="مثال: مصاريف مشوار" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <button onClick={save} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تسجيل</button>
@@ -3577,7 +3650,7 @@ function AttendanceCalendar({ employeeName, records, withdrawals, editable, onEd
       </div>
 
       <div className="grid grid-cols-7 gap-1 mb-1">
-        {weekdayLabels.map((w, i) => <div key={i} className="text-center text-[10px] text-[#7C818C] font-bold">{w}</div>)}
+        {weekdayLabels.map((w, i) => <div key={i} className="text-center text-[10px] text-[#64748B] font-bold">{w}</div>)}
       </div>
       <div className="grid grid-cols-7 gap-1 mb-4">
         {Array.from({ length: startOffset }).map((_, i) => <div key={`e${i}`} />)}
@@ -3608,15 +3681,15 @@ function AttendanceCalendar({ employeeName, records, withdrawals, editable, onEd
 
       <div className="grid grid-cols-3 gap-2 mb-2">
         <div className="price-chip text-center">
-          <p className="text-[10px] text-[#9A9EA6] mb-0.5">أيام الحضور</p>
+          <p className="text-[10px] text-[#94A3B8] mb-0.5">أيام الحضور</p>
           <p className="font-bold text-emerald-400 tabular-nums">{stats.present}</p>
         </div>
         <div className="price-chip text-center">
-          <p className="text-[10px] text-[#9A9EA6] mb-0.5">أيام الغياب</p>
+          <p className="text-[10px] text-[#94A3B8] mb-0.5">أيام الغياب</p>
           <p className="font-bold text-rose-400 tabular-nums">{stats.absent}</p>
         </div>
         <div className="price-chip text-center">
-          <p className="text-[10px] text-[#9A9EA6] mb-0.5">إجمالي السحب</p>
+          <p className="text-[10px] text-[#94A3B8] mb-0.5">إجمالي السحب</p>
           <p className="font-bold text-amber-400 tabular-nums">{monthWithdrawalTotal}</p>
         </div>
       </div>
@@ -3633,12 +3706,12 @@ function AttendanceCalendar({ employeeName, records, withdrawals, editable, onEd
       {selectedDay && !editable && (
         <Modal title={new Date(selectedDay).toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" })} accent="#0EA5E9" onClose={() => setSelectedDay(null)}>
           <div className="space-y-2 text-sm">
-            <p className="text-[#D4D4D8]">
+            <p className="text-[#CBD5E1]">
               الحضور: <span className="font-bold" style={{ color: ATTENDANCE_STATUS[byDate[selectedDay]?.attendanceStatus]?.color }}>
                 {ATTENDANCE_STATUS[byDate[selectedDay]?.attendanceStatus]?.label || "-"}
               </span>
             </p>
-            <p className="text-[#D4D4D8]">
+            <p className="text-[#CBD5E1]">
               إجمالي السحب في اليوم ده: <span className="font-bold text-amber-300">{withdrawalTotalByDate[selectedDay] || 0}</span>
             </p>
           </div>
@@ -3696,11 +3769,11 @@ function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals,
         <PullToRefresh onRefresh={handleRefresh} />
         <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الحضور والسحب" onNav={setView} />
         <div className="max-w-lg mx-auto px-4 py-2 fade-up space-y-3 pb-6">
-          {employeeList.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">لا يوجد موظفين معتمدين بعد</p>}
+          {employeeList.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لا يوجد موظفين معتمدين بعد</p>}
           {employeeList.map((u) => (
             <button key={u.id} onClick={() => setSelectedEmployee(u.name)} className="panel rounded-2xl p-4 w-full text-right flex items-center justify-between">
               <span className="font-bold text-white text-sm">{u.name}</span>
-              <Icon name="ChevronLeft" size={16} className="text-[#9A9EA6] rotate-180" />
+              <Icon name="ChevronLeft" size={16} className="text-[#94A3B8] rotate-180" />
             </button>
           ))}
         </div>
@@ -3737,13 +3810,13 @@ function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals,
             </button>
 
             <h3 className="font-bold text-sm text-white mb-2">سحوباتي</h3>
-            {myWithdrawals.length === 0 && <p className="text-center text-[#6B7078] py-4 text-xs">لسه ما سجلتش أي سحب</p>}
+            {myWithdrawals.length === 0 && <p className="text-center text-[#64748B] py-4 text-xs">لسه ما سجلتش أي سحب</p>}
             <div className="space-y-2">
               {myWithdrawals.map((w) => (
                 <div key={w.id} className="panel rounded-xl p-3 flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-[#9A9EA6]">{new Date(w.createdAt).toLocaleString("ar-EG")}</p>
-                    {w.note && <p className="text-xs text-[#D4D4D8] mt-0.5">{w.note}</p>}
+                    <p className="text-xs text-[#94A3B8]">{new Date(w.createdAt).toLocaleString("ar-EG")}</p>
+                    {w.note && <p className="text-xs text-[#CBD5E1] mt-0.5">{w.note}</p>}
                   </div>
                   <span className="font-bold text-amber-300 tabular-nums">{w.amount}</span>
                 </div>
@@ -3795,7 +3868,7 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
             {a.type === "outOfStock" ? "منتج خلص" : "طلب منتج غير موجود"}
           </span>
           <h3 className="font-bold text-sm text-white">{a.productName}</h3>
-          {a.branch && <p className="text-xs text-[#9A9EA6] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> فرع {a.branch}</p>}
+          {a.branch && <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> فرع {a.branch}</p>}
         </div>
         {!a.resolved && (
           <button onClick={() => resolve(a)} className="text-xs btn-emerald px-3 py-1.5 rounded-lg font-semibold shrink-0 flex items-center gap-1">
@@ -3804,7 +3877,7 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
         )}
       </div>
       <p className="text-xs font-bold text-amber-300">
-        {a.reportedBy} <span className="text-[#7C818C] font-normal">· {new Date(a.reportedAt).toLocaleString("ar-EG")}</span>
+        {a.reportedBy} <span className="text-[#64748B] font-normal">· {new Date(a.reportedAt).toLocaleString("ar-EG")}</span>
       </p>
     </div>
   );
@@ -3832,7 +3905,7 @@ function StockAlertsScreen({ user, stockAlerts, setStockAlerts, setView }) {
         </div>
 
         <div className="space-y-3 pb-4">
-          {unresolved.length === 0 && <p className="text-center text-[#6B7078] py-8 text-sm">مفيش تنبيهات جديدة</p>}
+          {unresolved.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">مفيش تنبيهات جديدة</p>}
           {unresolved.map((a) => <AlertCard key={a.id} a={a} />)}
         </div>
 
@@ -3933,7 +4006,7 @@ function TierSettingsModal({ tierSettings, setTierSettings, onClose }) {
 
   const addTier = () => {
     const usedColors = tiers.map((t) => t.color);
-    const nextColor = TIER_COLOR_CHOICES.find((c) => !usedColors.includes(c)) || "#9A9EA6";
+    const nextColor = TIER_COLOR_CHOICES.find((c) => !usedColors.includes(c)) || "#94A3B8";
     setTiers([...tiers, { id: uid(), label: "", color: nextColor, archived: false }]);
   };
 
@@ -3960,7 +4033,7 @@ function TierSettingsModal({ tierSettings, setTierSettings, onClose }) {
 
   return (
     <Modal title="ميزات إضافية" accent="#10B981" onClose={onClose}>
-      <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات الأسعار (الأسماء والألوان)</p>
+      <p className="text-xs text-[#94A3B8] mb-2">تصنيفات الأسعار (الأسماء والألوان)</p>
       {activeList.map((tier) => (
         <div key={tier.id} className="flex items-center gap-2 mb-2">
           <input
@@ -3987,7 +4060,7 @@ function TierSettingsModal({ tierSettings, setTierSettings, onClose }) {
 
       {archivedList.length > 0 && (
         <div className="mb-3">
-          <p className="text-xs text-[#9A9EA6] mb-2">تصنيفات محذوفة (تقدر ترجّعها)</p>
+          <p className="text-xs text-[#94A3B8] mb-2">تصنيفات محذوفة (تقدر ترجّعها)</p>
           {archivedList.map((tier) => (
             <div key={tier.id} className="flex items-center gap-2 mb-2 opacity-70">
               <span className="flex-1 field-input rounded-xl px-3 py-2 text-sm">{tier.label || "(بدون اسم)"}</span>
@@ -3998,14 +4071,14 @@ function TierSettingsModal({ tierSettings, setTierSettings, onClose }) {
         </div>
       )}
 
-      <label className="flex items-center gap-2 text-xs text-[#D4D4D8] mb-3">
+      <label className="flex items-center gap-2 text-xs text-[#CBD5E1] mb-3">
         <input type="checkbox" checked={hideFromCustomer} onChange={(e) => setHideFromCustomer(e.target.checked)} />
         إخفاء أسماء التصنيفات عن الزبون في الكاشير (زراير ملونة بس)
       </label>
 
       {tierError && <p className="text-rose-400 text-xs mb-3">{tierError}</p>}
 
-      <p className="text-[11px] text-[#6B7078] mb-3 leading-5">
+      <p className="text-[11px] text-[#64748B] mb-3 leading-5">
         ملحوظة: حذف تصنيف بيخبيه بس من الكاشير وأسعار المحل، وأسعاره القديمة بتفضل متسجلة زي ما هي — ترجّعه في أي وقت من "تصنيفات محذوفة" فوق وهتلاقي أسعاره القديمة رجعت زي ما كانت.
       </p>
 
@@ -4044,8 +4117,8 @@ function InvoiceNumberSettingsModal({ invoiceNumberSettings, setInvoiceNumberSet
 
   return (
     <Modal title="ترقيم الفواتير" accent="#10B981" onClose={onClose}>
-      <p className="text-xs text-[#9A9EA6] mb-3">رقم الفاتورة الجاية: <span className="text-white font-bold">{invoiceNumberSettings.nextNumber}</span></p>
-      <p className="text-xs text-[#9A9EA6] mb-2">الريسيت التلقائي</p>
+      <p className="text-xs text-[#94A3B8] mb-3">رقم الفاتورة الجاية: <span className="text-white font-bold">{invoiceNumberSettings.nextNumber}</span></p>
+      <p className="text-xs text-[#94A3B8] mb-2">الريسيت التلقائي</p>
       <div className="space-y-2 mb-4">
         {FREQ_OPTIONS.map((opt) => (
           <button
@@ -4107,7 +4180,7 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
               <Icon name={it.icon} size={16} />
               {it.label}
             </span>
-            <Icon name="ChevronLeft" size={16} className="text-[#6B7078]" />
+            <Icon name="ChevronLeft" size={16} className="text-[#64748B]" />
           </button>
         ))}
       </div>
@@ -4209,13 +4282,13 @@ function AdminScreen({ user, users, setUsers, setView }) {
       <div className="max-w-lg mx-auto px-4 py-4 fade-up space-y-6">
         <section>
           <h2 className="font-bold text-sm text-sky-400 mb-3">طلبات قيد الانتظار ({pending.length})</h2>
-          {pending.length === 0 && <p className="text-sm text-[#6B7078]">لا توجد طلبات جديدة</p>}
+          {pending.length === 0 && <p className="text-sm text-[#64748B]">لا توجد طلبات جديدة</p>}
           <div className="space-y-3">
             {pending.map((u) => (
               <div key={u.id} className="panel rounded-2xl p-4 flex items-center justify-between">
                 <div>
                   <div className="font-bold text-sm text-white">{u.name}</div>
-                  <div className="text-xs text-[#6B7078]">طلب انضمام جديد</div>
+                  <div className="text-xs text-[#64748B]">طلب انضمام جديد</div>
                 </div>
                 <div className={`flex gap-2 ${justActed === u.id ? "stamp-anim" : ""}`}>
                   <button onClick={() => decide(u, "approved")} className="btn-emerald rounded-lg p-2"><Icon name="CheckCircle2" size={17} /></button>
@@ -4228,7 +4301,7 @@ function AdminScreen({ user, users, setUsers, setView }) {
 
         <section>
           <h2 className="font-bold text-sm text-sky-400 mb-3">المستخدمون المعتمدون ({approved.length})</h2>
-          {approved.length === 0 && <p className="text-sm text-[#6B7078]">لا يوجد مستخدمين بعد</p>}
+          {approved.length === 0 && <p className="text-sm text-[#64748B]">لا يوجد مستخدمين بعد</p>}
           <div className="space-y-3">
             {approved.map((u) => (
               <div key={u.id} className="panel rounded-2xl p-4">
@@ -4237,15 +4310,15 @@ function AdminScreen({ user, users, setUsers, setView }) {
                   <button onClick={() => removeUser(u.id)} className="text-rose-400 hover:text-rose-300"><Icon name="Trash2" size={16} /></button>
                 </div>
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
+                  <label className="flex items-center gap-2 text-xs text-[#CBD5E1]">
                     <input type="checkbox" checked={!!u.permissions?.manageProducts} onChange={() => togglePermission(u, "manageProducts")} />
                     صلاحية إضافة المنتجات
                   </label>
-                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
+                  <label className="flex items-center gap-2 text-xs text-[#CBD5E1]">
                     <input type="checkbox" checked={!!u.permissions?.deleteProducts} onChange={() => togglePermission(u, "deleteProducts")} />
                     صلاحية حذف المنتجات
                   </label>
-                  <label className="flex items-center gap-2 text-xs text-[#D4D4D8]">
+                  <label className="flex items-center gap-2 text-xs text-[#CBD5E1]">
                     <input type="checkbox" checked={!!u.permissions?.editPrices} onChange={() => togglePermission(u, "editPrices")} />
                     صلاحية تعديل الأسعار
                   </label>
@@ -4259,14 +4332,14 @@ function AdminScreen({ user, users, setUsers, setView }) {
           <h2 className="font-bold text-sm text-sky-400 mb-3">النسخ الاحتياطي</h2>
           <div className="panel rounded-2xl p-4 space-y-3">
             <div>
-              <p className="text-xs text-[#D4D4D8] mb-2">تحميل نسخة من كل بيانات التطبيق (منتجات، أوردرات، تحويلات، مستخدمين...) في ملف واحد تقدر تحتفظ بيه.</p>
+              <p className="text-xs text-[#CBD5E1] mb-2">تحميل نسخة من كل بيانات التطبيق (منتجات، أوردرات، تحويلات، مستخدمين...) في ملف واحد تقدر تحتفظ بيه.</p>
               <button onClick={downloadBackup} disabled={backingUp} className="btn-emerald w-full rounded-xl py-2.5 text-sm font-bold flex items-center justify-center gap-2">
                 {backingUp ? <><Icon name="Loader2" size={16} className="animate-spin" /> بيجهّز الملف...</> : "تحميل نسخة احتياطية"}
               </button>
             </div>
 
             <div className="pt-3 border-t border-white/5">
-              <p className="text-xs text-[#D4D4D8] mb-2">استعادة البيانات من ملف نسخة احتياطية سابق. البيانات الحالية <span className="font-bold text-amber-300">مش هتتمسح</span> — الملف هيدمج بياناته مع الموجود.</p>
+              <p className="text-xs text-[#CBD5E1] mb-2">استعادة البيانات من ملف نسخة احتياطية سابق. البيانات الحالية <span className="font-bold text-amber-300">مش هتتمسح</span> — الملف هيدمج بياناته مع الموجود.</p>
               {restoring ? (
                 <p className="text-xs text-sky-400 flex items-center gap-1.5"><Icon name="Loader2" size={14} className="animate-spin" /> بيستعيد... {restoreProgress}</p>
               ) : restoreDone ? (
@@ -4323,6 +4396,30 @@ function App() {
   const remindedDateRef = React.useRef(null);
   const [syncError, setSyncError] = useState(null);
 
+  // App-wide ripple feedback on every button tap — one listener instead of
+  // wiring each button individually.
+  useEffect(() => {
+    const handler = (e) => {
+      const btn = e.target.closest("button");
+      if (!btn || btn.disabled) return;
+      const rect = btn.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height);
+      const ripple = document.createElement("span");
+      ripple.className = "ripple-el";
+      ripple.style.left = `${e.clientX - rect.left - size / 2}px`;
+      ripple.style.top = `${e.clientY - rect.top - size / 2}px`;
+      ripple.style.width = `${size}px`;
+      ripple.style.height = `${size}px`;
+      if (getComputedStyle(btn).position === "static") btn.style.position = "relative";
+      btn.style.overflow = "hidden";
+      btn.appendChild(ripple);
+      ripple.addEventListener("animationend", () => ripple.remove());
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, []);
+
+
   useEffect(() => {
     const handler = (e) => {
       setSyncError(e.detail);
@@ -4356,12 +4453,24 @@ function App() {
       // so they're NOT fetched here — only when the Prices screen is opened (see nav()).
       setChangedToday((await changesStore.loadAll()) || []);
       setOrders((await ordersStore.loadAll()) || []);
-      setCategories((await categoriesStore.loadAll()) || []);
+      const loadedCategories = await categoriesStore.loadAll();
+      if (loadedCategories) {
+        setCategories(loadedCategories);
+        saveDataCache("categories", loadedCategories);
+      } else {
+        setCategories(loadDataCache("categories") || []);
+      }
       setTransfers((await transfersStore.loadAll()) || []);
       setStockAlerts((await stockAlertsStore.loadAll()) || []);
       setAttendance((await attendanceStore.loadAll()) || []);
       setWithdrawals((await withdrawalsStore.loadAll()) || []);
-      setSales((await salesStore.loadAll()) || []);
+      const loadedSales = await salesStore.loadAll();
+      if (loadedSales) {
+        setSales(loadedSales);
+        saveDataCache("sales", loadedSales);
+      } else {
+        setSales(loadDataCache("sales") || []);
+      }
       const loadedSettings = await settingsStore.loadAll();
       const savedTierSettings = loadedSettings && loadedSettings.find((s) => s.id === "tier_settings");
       if (savedTierSettings) {
@@ -4371,7 +4480,7 @@ function App() {
           tiers = Object.keys(savedTierSettings.labels).map((id) => ({
             id,
             label: savedTierSettings.labels[id],
-            color: (savedTierSettings.colors && savedTierSettings.colors[id]) || "#9A9EA6",
+            color: (savedTierSettings.colors && savedTierSettings.colors[id]) || "#94A3B8",
             archived: false,
           }));
         }
@@ -4403,6 +4512,12 @@ function App() {
       syncOfflineQueue();
     })();
   }, []);
+
+  // Keep the local cache fresh whenever sales change (e.g. right after checkout),
+  // so a completed sale isn't lost if the app closes before the next boot.
+  useEffect(() => {
+    if (sales.length) saveDataCache("sales", sales);
+  }, [sales]);
 
   // Retry queued offline writes whenever the connection comes back, and
   // periodically in case the "online" event doesn't fire reliably on the device.
@@ -4499,6 +4614,7 @@ function App() {
   };
 
   const [productsLoaded, setProductsLoaded] = useState(false);
+  const [usingCachedProducts, setUsingCachedProducts] = useState(false);
   const [productsLoading, setProductsLoading] = useState(false);
 
   const ensureProductsLoaded = async () => {
@@ -4508,6 +4624,14 @@ function App() {
     if (data) {
       setProducts(data);
       setProductsLoaded(true);
+      saveDataCache("products", data);
+    } else {
+      const cached = loadDataCache("products");
+      if (cached) {
+        setProducts(cached);
+        setProductsLoaded(true);
+        setUsingCachedProducts(true);
+      }
     }
     setProductsLoading(false);
   };
@@ -4553,8 +4677,13 @@ function App() {
 
   if (booting) {
     return (
-      <div className="shop-root flex items-center justify-center">
-        <Icon name="Loader2" className="animate-spin text-sky-400" size={28} />
+      <div className="shop-root flex flex-col items-center justify-center gap-4" style={{ minHeight: "100vh" }}>
+        <img src="./icon-192.png" alt="" className="w-20 h-20 rounded-2xl shadow-lg splash-logo-pulse" />
+        <h1 className="text-2xl font-bold text-white tracking-wide splash-fade-in">FaAroon</h1>
+        <div className="splash-bar-track">
+          <div className="splash-bar-fill" />
+        </div>
+        <p className="text-xs text-[#64748B] splash-fade-in">...جارٍ التحميل</p>
       </div>
     );
   }
@@ -4581,10 +4710,10 @@ function App() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="font-bold text-amber-400 text-sm flex items-center gap-1.5"><Icon name="AlertCircle" size={14} /> عندك {reminder.length} أوردر لسه مدفوعش</p>
-              <p className="text-xs text-[#9A9EA6] mt-1">افتح "الطلبات" وأكد الدفع لما تستلم الفلوس.</p>
+              <p className="text-xs text-[#94A3B8] mt-1">افتح "الطلبات" وأكد الدفع لما تستلم الفلوس.</p>
               <button onClick={() => { setReminder(null); nav("orders"); }} className="text-xs text-sky-400 font-semibold mt-2 hover:underline">روح للطلبات دلوقتي</button>
             </div>
-            <button onClick={() => setReminder(null)} className="text-[#9A9EA6] hover:text-white shrink-0"><Icon name="X" size={16} /></button>
+            <button onClick={() => setReminder(null)} className="text-[#94A3B8] hover:text-white shrink-0"><Icon name="X" size={16} /></button>
           </div>
         </div>
       )}
@@ -4609,6 +4738,8 @@ function App() {
           categories={categories}
           setCategories={setCategories}
           tierSettings={tierSettings}
+          usingCachedProducts={usingCachedProducts}
+          setUsingCachedProducts={setUsingCachedProducts}
           setView={nav}
         />
       )}
@@ -4618,7 +4749,7 @@ function App() {
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
       {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} onDevReset={performFullReset} setView={nav} />}
-      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} setView={nav} />}
+      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} usingCachedProducts={usingCachedProducts} setView={nav} />}
       {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );

@@ -5,8 +5,13 @@ html, body { margin: 0; padding: 0; }
       .shop-root {
         font-family: 'Cairo', sans-serif;
         direction: rtl;
-        background: #0B1224;
-        color: #F2F2F3;
+        background-color: #0F172A;
+        background-image:
+          radial-gradient(circle at 12% 8%, rgba(14,165,233,0.12) 0%, transparent 38%),
+          radial-gradient(circle at 88% 20%, rgba(16,185,129,0.08) 0%, transparent 35%),
+          radial-gradient(circle at 50% 95%, rgba(99,102,241,0.10) 0%, transparent 42%);
+        background-attachment: fixed;
+        color: #F8FAFC;
         min-height: 100vh;
       }
 
@@ -36,61 +41,102 @@ html, body { margin: 0; padding: 0; }
       }
       .toast-in { animation: toastIn 0.2s ease both; }
 
+      @keyframes slideInRight {
+        from { transform: translateX(100%); }
+        to { transform: translateX(0); }
+      }
+
+      @keyframes skeletonPulse {
+        0%, 100% { opacity: 0.55; }
+        50% { opacity: 1; }
+      }
+      .skeleton { background: #1E293B; border-radius: 0.75rem; animation: skeletonPulse 1.3s ease-in-out infinite; }
+
+      @keyframes rippleAnim {
+        to { transform: scale(2.4); opacity: 0; }
+      }
+      .ripple-el { position: absolute; border-radius: 50%; background: rgba(255,255,255,0.35); pointer-events: none; transform: scale(0); animation: rippleAnim 0.5s ease-out; }
+
+      @keyframes splashPulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.08); }
+      }
+      .splash-logo-pulse { animation: splashPulse 1.4s ease-in-out infinite; }
+
+      @keyframes splashFadeIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .splash-fade-in { animation: splashFadeIn 0.6s ease both; }
+
+      .splash-bar-track { width: 140px; height: 4px; background: rgba(148,163,184,0.2); border-radius: 999px; overflow: hidden; }
+      .splash-bar-fill { height: 100%; width: 40%; background: linear-gradient(90deg, #0EA5E9, #10B981); border-radius: 999px; animation: splashBarMove 1.2s ease-in-out infinite; }
+      @keyframes splashBarMove {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(350%); }
+      }
+
       .panel {
-        background: #2A2E37;
-        border: 1px solid rgba(255,255,255,0.09);
+        background: #1E293B;
+        border: 1px solid rgba(51,65,85,0.5);
         box-shadow: 0 10px 25px -10px rgba(0,0,0,0.5);
       }
       .field-input {
-        background: #20232B;
-        border: 1px solid #3A3F4A;
-        color: #F2F2F3;
+        background: #0F172A;
+        border: 1px solid #334155;
+        color: #F8FAFC;
       }
-      .field-input::placeholder { color: #7C818C; }
-      .field-input:focus { border-color: #38BDF8; }
+      .field-input::placeholder { color: #64748B; }
+      .field-input:focus { border-color: #0EA5E9; }
 
-      .btn-sky { background: #0284C7; color: #F8FAFC; transition: background 0.15s ease, transform 0.1s ease; }
-      .btn-sky:hover { background: #0369A1; }
-      .btn-sky:active { transform: scale(0.98); }
+      .btn-sky { background: #0EA5E9; color: #F8FAFC; transition: background 0.15s ease, transform 0.1s ease; }
+      .btn-sky:hover { background: #0284C7; }
+      .btn-sky:active { transform: scale(0.96); }
 
-      .btn-emerald { background: #059669; color: #F8FAFC; transition: background 0.15s ease, transform 0.1s ease; }
-      .btn-emerald:hover { background: #047857; }
-      .btn-emerald:active { transform: scale(0.98); }
+      .btn-emerald { background: #10B981; color: #F8FAFC; transition: background 0.15s ease, transform 0.1s ease; }
+      .btn-emerald:hover { background: #059669; }
+      .btn-emerald:active { transform: scale(0.96); }
 
-      .btn-rose { background: rgba(225,29,72,0.15); color: #FB7185; border: 1px solid rgba(225,29,72,0.3); transition: all 0.15s ease; }
-      .btn-rose:hover { background: #E11D48; color: #F8FAFC; }
+      .btn-rose { background: rgba(244,63,94,0.15); color: #FB7185; border: 1px solid rgba(244,63,94,0.3); transition: all 0.15s ease, transform 0.1s ease; }
+      .btn-rose:hover { background: #F43F5E; color: #F8FAFC; }
+      .btn-rose:active { transform: scale(0.96); }
 
-      .btn-ghost { background: #20232B; color: #D4D4D8; border: 1px solid #3A3F4A; transition: background 0.15s ease; }
-      .btn-ghost:hover { background: #2A2E37; }
+      .btn-ghost { background: #1E293B; color: #CBD5E1; border: 1px solid #334155; transition: background 0.15s ease, transform 0.1s ease; }
+      .btn-ghost:hover { background: #263449; }
+      .btn-ghost:active { transform: scale(0.96); }
 
       .btn-whatsapp { background: #25D366; color: #05310F; transition: background 0.15s ease, transform 0.1s ease; }
       .btn-whatsapp:hover { background: #1FBD5A; }
-      .btn-whatsapp:active { transform: scale(0.98); }
+      .btn-whatsapp:active { transform: scale(0.96); }
 
       .toggle-pill {
-        background: #20232B; color: #D4D4D8; border: 1px solid #3A3F4A;
-        transition: all 0.15s ease;
+        background: #1E293B; color: #CBD5E1; border: 1px solid #334155;
+        transition: all 0.15s ease, transform 0.1s ease;
       }
-      .toggle-pill.active-emerald { background: rgba(5,150,105,0.2); color: #34D399; border-color: #059669; }
-      .toggle-pill.active-rose { background: rgba(225,29,72,0.18); color: #FB7185; border-color: #E11D48; }
-      .toggle-pill.active-sky { background: rgba(2,132,199,0.18); color: #38BDF8; border-color: #0284C7; }
+      .toggle-pill:active { transform: scale(0.96); }
+      .toggle-pill.active-emerald { background: rgba(16,185,129,0.2); color: #34D399; border-color: #10B981; }
+      .toggle-pill.active-rose { background: rgba(244,63,94,0.18); color: #FB7185; border-color: #F43F5E; }
+      .toggle-pill.active-sky { background: rgba(14,165,233,0.18); color: #38BDF8; border-color: #0EA5E9; }
       .toggle-pill.active-purple { background: rgba(168,85,247,0.18); color: #C084FC; border-color: #A855F7; }
 
       .icon-btn {
-        background: rgba(58,63,74,0.5);
-        border: 1px solid rgba(255,255,255,0.08);
-        color: #ADB2BC;
-        transition: all 0.15s ease;
+        background: rgba(51,65,85,0.5);
+        border: 1px solid rgba(148,163,184,0.15);
+        color: #94A3B8;
+        transition: all 0.15s ease, transform 0.1s ease;
       }
-      .icon-btn:hover { color: #F2F2F3; }
+      .icon-btn:hover { color: #F8FAFC; }
+      .icon-btn:active { transform: scale(0.94); }
 
-      .price-chip { background: rgba(255,255,255,0.05); border-radius: 0.5rem; padding: 0.35rem; text-align: center; }
+      .price-chip { background: rgba(148,163,184,0.07); border-radius: 0.5rem; padding: 0.35rem; text-align: center; }
 
       .header-bar {
         background: linear-gradient(120deg, #0EA5E9 0%, #6366F1 55%, #A855F7 100%);
         border: 1px solid rgba(255,255,255,0.15);
       }
 
-      ::selection { background: #38BDF8; color: #0B1224; }
-      input:focus, button:focus { outline: 2px solid #38BDF8; outline-offset: 1px; }
+      button:active:not(:disabled) { transform: scale(0.97); }
+
+      ::selection { background: #0EA5E9; color: #0F172A; }
+      input:focus, button:focus { outline: 2px solid #0EA5E9; outline-offset: 1px; }
     
