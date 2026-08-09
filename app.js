@@ -1,15 +1,61 @@
 const { useState, useEffect } = React;
 
-const ICONS = {"Store": "🏪", "User": "👤", "Lock": "🔒", "Users": "👥", "Package": "📦", "BarChart3": "📊", "LogOut": "🚪", "Plus": "➕", "Trash2": "🗑", "Pencil": "✏️", "CheckCircle2": "✅", "XCircle": "❌", "Clock": "🕐", "ChevronLeft": "‹", "AlertCircle": "⚠️", "KeyRound": "🔑", "Check": "✓", "X": "✕", "Loader2": "⏳", "Search": "🔍", "Camera": "📷", "MessageCircle": "💬", "Truck": "🚚", "MapPin": "📍", "Banknote": "💵", "Smartphone": "📱", "RotateCcw": "↺", "Wallet": "👛", "RefreshCw": "🔄", "Bell": "🔔", "Settings": "⚙️", "Send": "📤", "Tag": "🏷", "ScanLine": "📷", "Printer": "🖨️", "Menu": "☰", "ChevronDown": "⌄"};
+const ICON_SVGS = {
+  "Store": `<path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/><path d="M9 20v-6h6v6"/>`,
+  "User": `<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/>`,
+  "Lock": `<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>`,
+  "Users": `<circle cx="9" cy="8" r="3.5"/><path d="M2.5 21c0-3.6 3-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 8.5a3 3 0 1 0 0-6"/><path d="M18.5 15c2 .5 3.5 2.3 3.5 6"/>`,
+  "Package": `<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>`,
+  "BarChart3": `<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>`,
+  "LogOut": `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>`,
+  "Plus": `<path d="M12 5v14"/><path d="M5 12h14"/>`,
+  "Trash2": `<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/>`,
+  "Pencil": `<path d="M14.5 4.5l5 5L8 21H3v-5z"/>`,
+  "CheckCircle2": `<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 5-5"/>`,
+  "XCircle": `<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6"/><path d="M15 9l-6 6"/>`,
+  "Clock": `<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>`,
+  "ChevronLeft": `<path d="M15 6l-6 6 6 6"/>`,
+  "AlertCircle": `<circle cx="12" cy="12" r="9"/><path d="M12 7.5v6"/><path d="M12 16.5h.01"/>`,
+  "KeyRound": `<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3"/><path d="M17 6l3 3"/><path d="M14 9l2.5 2.5"/>`,
+  "Check": `<path d="M4 12l5 5L20 6"/>`,
+  "X": `<path d="M6 6l12 12"/><path d="M18 6L6 18"/>`,
+  "Loader2": `<path d="M12 3a9 9 0 1 0 9 9"/>`,
+  "Search": `<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.8-4.8"/>`,
+  "Camera": `<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>`,
+  "MessageCircle": `<path d="M4 12a8 8 0 1 1 3.5 6.6L4 20l1.2-3.6A7.96 7.96 0 0 1 4 12z"/>`,
+  "Truck": `<rect x="1" y="8" width="13" height="8"/><path d="M14 11h4l3 3v2h-7z"/><circle cx="6" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>`,
+  "MapPin": `<path d="M12 21s7-6.5 7-11.5A7 7 0 0 0 5 9.5C5 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.3"/>`,
+  "Banknote": `<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v.01"/><path d="M18 15v.01"/>`,
+  "Smartphone": `<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>`,
+  "RotateCcw": `<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>`,
+  "Wallet": `<path d="M3 7a2 2 0 0 1 2-2h13a1 1 0 0 1 1 1v3"/><path d="M3 7v11a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1H6a2 2 0 0 1-2-2z"/><circle cx="16.5" cy="14" r="1.2"/>`,
+  "RefreshCw": `<path d="M21 12a9 9 0 0 0-15.5-6.3L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.5 6.3L21 16"/><path d="M21 21v-5h-5"/>`,
+  "Bell": `<path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 14 6 10z"/><path d="M10 19a2 2 0 0 0 4 0"/>`,
+  "Settings": `<circle cx="12" cy="12" r="3"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M4.2 4.2l2.1 2.1"/><path d="M17.7 17.7l2.1 2.1"/><path d="M2 12h3"/><path d="M19 12h3"/><path d="M4.2 19.8l2.1-2.1"/><path d="M17.7 6.3l2.1-2.1"/>`,
+  "Send": `<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/>`,
+  "Tag": `<path d="M20.6 12.6L12.6 20.6a2 2 0 0 1-2.8 0l-7.4-7.4a2 2 0 0 1-.6-1.4V4a1 1 0 0 1 1-1h7.8a2 2 0 0 1 1.4.6l7.4 7.4a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>`,
+  "ScanLine": `<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M3 12h18"/>`,
+  "Printer": `<path d="M6 9V3h12v6"/><rect x="4" y="9" width="16" height="8" rx="1"/><path d="M6 14h12v7H6z"/>`,
+  "Menu": `<path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/>`,
+  "ChevronDown": `<path d="M6 9l6 6 6-6"/>`
+};
 
 function Icon({ name, size = 18, className = "", style = {} }) {
+  const inner = ICON_SVGS[name] || '<circle cx="12" cy="12" r="9"/>';
   return (
-    <span
+    <svg
       className={className}
-      style={{ fontSize: size, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", width: size, height: size, ...style }}
-    >
-      {ICONS[name] || "•"}
-    </span>
+      style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0, ...style }}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      dangerouslySetInnerHTML={{ __html: inner }}
+    />
   );
 }
 
@@ -281,6 +327,28 @@ const DEFAULT_INVOICE_NUMBER_SETTINGS = {
   lastResetKey: null,
 };
 
+const DEFAULT_BRANCH_SETTINGS = {
+  id: "branch_settings",
+  branches: [
+    { id: "sanania", name: "السنانية" },
+    { id: "matary", name: "المطري" },
+  ],
+};
+
+// Looks at a user's last 10 attendance records (most recent first) and
+// returns the branch they picked most often, so the check-in screen can
+// pre-select it for them instead of starting blank every day.
+function suggestUsualBranch(attendance, employeeName) {
+  const recent = attendance
+    .filter((a) => a.employeeName === employeeName && a.branchId)
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+    .slice(0, 10);
+  if (!recent.length) return null;
+  const counts = {};
+  recent.forEach((a) => { counts[a.branchId] = (counts[a.branchId] || 0) + 1; });
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+}
+
 function currentResetKey(freq) {
   const now = new Date();
   if (freq === "daily") return now.toISOString().slice(0, 10);
@@ -372,6 +440,14 @@ const STORE_BY_COLLECTION = {
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function getTodayBranchName(attendance, employeeName, branches) {
+  const today = todayStr();
+  const rec = attendance.find((a) => a.employeeName === employeeName && a.date === today && a.branchId);
+  if (!rec) return null;
+  const branch = branches.find((b) => b.id === rec.branchId);
+  return branch ? branch.name : null;
 }
 
 // The shop's "business day" for withdrawals runs 11am to 3am the next calendar
@@ -492,27 +568,84 @@ function playBeep(type = "success") {
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.type = "sine";
+    const now = ctx.currentTime;
     if (type === "success") {
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0.15, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.16);
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.1);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.start(now);
+      osc.stop(now + 0.16);
+    } else if (type === "error") {
+      osc.frequency.setValueAtTime(220, now);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc.start(now);
+      osc.stop(now + 0.26);
+    } else if (type === "add") {
+      osc.frequency.setValueAtTime(660, now);
+      osc.frequency.exponentialRampToValueAtTime(990, now + 0.08);
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.start(now);
+      osc.stop(now + 0.11);
+    } else if (type === "remove") {
+      osc.frequency.setValueAtTime(500, now);
+      osc.frequency.exponentialRampToValueAtTime(320, now + 0.08);
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.start(now);
+      osc.stop(now + 0.11);
+    } else if (type === "scan") {
+      osc.frequency.setValueAtTime(1200, now);
+      gain.gain.setValueAtTime(0.14, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      osc.start(now);
+      osc.stop(now + 0.09);
+    } else if (type === "switch") {
+      osc.frequency.setValueAtTime(520, now);
+      gain.gain.setValueAtTime(0.07, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      osc.start(now);
+      osc.stop(now + 0.06);
     } else {
-      osc.frequency.setValueAtTime(220, ctx.currentTime);
-      gain.gain.setValueAtTime(0.15, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.26);
+      // "tap" — a very light neutral click for frequent taps (numpad, etc.)
+      osc.frequency.setValueAtTime(700, now);
+      gain.gain.setValueAtTime(0.05, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.035);
+      osc.start(now);
+      osc.stop(now + 0.04);
     }
     osc.onended = () => ctx.close();
   } catch (e) {
-    // Web Audio unsupported/blocked — silently skip, never block the sale over a sound.
+    // Web Audio unsupported/blocked — silently skip, never block the action over a sound.
   }
 }
 
 const DATA_CACHE_PREFIX = "faaroon_cache_";
+
+const RECENT_SEARCHES_KEY = "faaroon_recent_searches";
+
+function loadRecentSearches() {
+  try {
+    const raw = localStorage.getItem(RECENT_SEARCHES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushRecentSearch(term) {
+  if (!term || !term.trim()) return [];
+  try {
+    const existing = loadRecentSearches().filter((t) => t !== term);
+    const updated = [term, ...existing].slice(0, 6);
+    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return loadRecentSearches();
+  }
+}
 
 function saveDataCache(key, data) {
   try { localStorage.setItem(DATA_CACHE_PREFIX + key, JSON.stringify(data)); } catch {}
@@ -794,6 +927,65 @@ function SkeletonRows({ count = 4, height = 56 }) {
   );
 }
 
+function AutocompleteInput({ value, onChange, options, placeholder, className, inputClassName, minChars = 2, maxSuggestions = 5, autoFocus }) {
+  const [focused, setFocused] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(0);
+
+  const normalizedValue = normalizeArabic(value || "");
+  const matches = normalizedValue.length >= minChars
+    ? options.filter((o) => normalizeArabic(o).includes(normalizedValue) && o !== value).slice(0, maxSuggestions)
+    : [];
+
+  const pick = (opt) => {
+    onChange(opt);
+    setFocused(false);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      if (matches.length > 0) {
+        e.preventDefault();
+        pick(matches[Math.min(highlightIndex, matches.length - 1)]);
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.min(i + 1, matches.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.max(i - 1, 0));
+    }
+  };
+
+  return (
+    <div className={`relative ${className || ""}`}>
+      <input
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setHighlightIndex(0); }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 150)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        className={inputClassName || "field-input w-full rounded-xl px-3 py-2 text-sm"}
+      />
+      {focused && matches.length > 0 && (
+        <div className="absolute z-20 top-full inset-x-0 mt-1 panel rounded-xl overflow-hidden shadow-xl">
+          {matches.map((opt, i) => (
+            <button
+              key={opt}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(opt)}
+              className={`w-full text-right px-3 py-2 text-sm ${i === highlightIndex ? "bg-white/10 text-white" : "text-[#CBD5E1]"}`}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Modal({ title, accent = "#38BDF8", onClose, children }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4 modal-backdrop" onClick={onClose}>
@@ -954,7 +1146,7 @@ function SideDrawer({ user, onNav, onClose }) {
   );
 }
 
-function Header({ user, onLogout, title, onBack, onNav }) {
+function Header({ user, onLogout, title, onBack, onNav, hideMenu }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   return (
     <>
@@ -978,14 +1170,11 @@ function Header({ user, onLogout, title, onBack, onNav }) {
               <Icon name="Settings" size={17} />
             </button>
           )}
-          {onNav && (
+          {onNav && !hideMenu && (
             <button onClick={() => setDrawerOpen(true)} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
               <Icon name="Menu" size={18} />
             </button>
           )}
-          <button onClick={onLogout} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
-            <Icon name="LogOut" size={18} />
-          </button>
         </div>
       </div>
       {drawerOpen && onNav && (
@@ -1042,37 +1231,26 @@ function ProfileModal({ user, users, setUsers, onClose, onUpdated }) {
 function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
   const items = [
     { key: "cashier", label: "الكاشير", desc: "بيع منتجات وطباعة فاتورة", icon: "Wallet", enabled: true, accent: "#10B981" },
-    { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: user.role === "admin", accent: "#10B981" },
-    { key: "orders", label: "الطلبات", desc: "تسجيل أوردرات جديدة", icon: "Package", enabled: true, accent: "#F59E0B" },
+    { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: user.role === "admin", accent: "#14B8A6" },
+    { key: "orders", label: "الطلبات", desc: "تسجيل أوردرات جديدة", icon: "Package", enabled: true, accent: "#F97316" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
-    { key: "attendance", label: "الحضور والسحب", desc: "سجل حضورك وسحوباتك", icon: "Clock", enabled: true, accent: "#0EA5E9" },
+    { key: "attendance", label: "الحضور والسحب", desc: "سجل حضورك وسحوباتك", icon: "Clock", enabled: true, accent: "#06B6D4" },
     { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: user.role === "admin", accent: "#0EA5E9" },
-    { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: user.role === "admin", accent: "#F43F5E" },
-    { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: user.role === "admin", accent: "#F59E0B" },
+    { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: user.role === "admin", accent: "#6366F1" },
+    { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: user.role === "admin", accent: "#F43F5E" },
   ].filter((i) => (i.key !== "admin" && i.key !== "reports" && i.key !== "stock-alerts" && i.key !== "prices") || user.role === "admin");
 
-  // Hidden developer entry point: admin taps the version label 3 times within
-  // ~1.2s to reach the password-gated full data reset (used for clearing test data).
-  const [tapCount, setTapCount] = useState(0);
-  const tapTimerRef = React.useRef(null);
-  const [showDevReset, setShowDevReset] = useState(false);
-
-  const handleVersionTap = () => {
-    setTapCount((c) => {
-      const next = c + 1;
-      if (next >= 3) {
-        setShowDevReset(true);
-        return 0;
-      }
-      return next;
-    });
-    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
-    tapTimerRef.current = setTimeout(() => setTapCount(0), 1200);
-  };
+  const FAB_OPTIONS = [
+    { key: "prices", label: "منتج", icon: "Package", color: "#14B8A6", enabled: user.role === "admin" },
+    { key: "orders", label: "أوردر", icon: "Truck", color: "#F97316", enabled: true },
+    { key: "cashier", label: "عميل", icon: "User", color: "#10B981", enabled: true },
+    { key: "transfers", label: "تحويل", icon: "Send", color: "#A855F7", enabled: true },
+  ].filter((o) => o.enabled);
+  const [fabOpen, setFabOpen] = useState(false);
 
   return (
     <div className="shop-root">
-      <Header user={user} onLogout={onLogout} title="محلات FaAroon" onNav={setView} />
+      <Header user={user} onLogout={onLogout} title="محلات FaAroon" onNav={setView} hideMenu />
 
       <div className="max-w-md mx-auto px-4 py-4 grid grid-cols-2 gap-3 fade-up">
         {items.map((it) => {
@@ -1101,13 +1279,28 @@ function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
         })}
       </div>
 
-      {user.role === "admin" && (
-        <p onClick={handleVersionTap} className="text-center text-[10px] text-[#475569] py-4 select-none cursor-default">
-          الإصدار ١.٠
-        </p>
-      )}
 
-      {showDevReset && <DevResetModal onClose={() => setShowDevReset(false)} onConfirmed={onDevReset} />}
+
+      <div className="fixed bottom-5 left-5 z-[90] flex flex-col items-start gap-2">
+        {fabOpen && FAB_OPTIONS.map((opt) => (
+          <button
+            key={opt.key}
+            onClick={() => { setView(opt.key); setFabOpen(false); }}
+            className="flex items-center gap-2 rounded-full pl-4 pr-3 py-2 shadow-lg text-white text-xs font-bold fade-up"
+            style={{ background: opt.color }}
+          >
+            {opt.label}
+            <Icon name={opt.icon} size={16} />
+          </button>
+        ))}
+        <button
+          onClick={() => setFabOpen((v) => !v)}
+          className="w-14 h-14 rounded-full flex items-center justify-center shadow-xl text-white text-2xl font-bold"
+          style={{ background: "linear-gradient(135deg, #0EA5E9, #6366F1)", transform: fabOpen ? "rotate(45deg)" : "none", transition: "transform 0.2s ease" }}
+        >
+          +
+        </button>
+      </div>
     </div>
   );
 }
@@ -1611,17 +1804,14 @@ function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSetting
   return (
     <Modal title="فاتورة جديدة" accent="#10B981" onClose={onClose}>
       <p className="text-xs text-[#94A3B8] mb-1.5">اسم الزبون (اختياري)</p>
-      <input
+      <AutocompleteInput
         value={customerName}
-        onChange={(e) => handleNameChange(e.target.value)}
-        list="cashier-customer-names"
+        onChange={handleNameChange}
+        options={customerNameOptions}
         placeholder="اكتب اسم الزبون"
-        className="field-input w-full rounded-xl px-3 py-2 text-sm mb-1.5"
+        className="mb-1.5"
       />
       {tierAutoPicked && <p className="text-[11px] text-sky-400 mb-2.5">اخترنا تصنيف السعر تلقائي بناءً على آخر مرة اشترى فيها</p>}
-      <datalist id="cashier-customer-names">
-        {customerNameOptions.map((n) => <option key={n} value={n} />)}
-      </datalist>
 
       <div className="flex flex-wrap gap-2 mb-4">
         {activeTiers(tierSettings).map((tier) => (
@@ -1652,6 +1842,7 @@ function NumPad({ title, initialValue, onConfirm, onClose }) {
   const KEYS = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "⌫"];
 
   const press = (k) => {
+    playBeep("tap");
     if (k === "⌫") {
       setValue((v) => v.slice(0, -1));
       return;
@@ -1660,7 +1851,7 @@ function NumPad({ title, initialValue, onConfirm, onClose }) {
     setValue((v) => v + k);
   };
 
-  return (
+  return ReactDOM.createPortal(
     <Modal title={title} accent="#0EA5E9" onClose={onClose}>
       <div className="text-center text-3xl font-bold text-white mb-4 tabular-nums py-3 border-b border-white/10 min-h-[3rem]">{value || "0"}</div>
       <div className="grid grid-cols-3 gap-2 mb-4">
@@ -1674,11 +1865,12 @@ function NumPad({ title, initialValue, onConfirm, onClose }) {
         <button onClick={() => onConfirm(value)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold">تم</button>
         <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إلغاء</button>
       </div>
-    </Modal>
+    </Modal>,
+    document.body
   );
 }
 
-function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAdd, onUpdate, onSuppressWarning, onClose }) {
+function ProductPickerModal({ product, invoice, existingItem, tierSettings, user, onAdd, onUpdate, onSuppressWarning, onClose }) {
   const [tierKey, setTierKey] = useState(existingItem?.tierKey || invoice.tierKey);
   const [qty, setQty] = useState(existingItem ? String(existingItem.qty) : "1");
   const [priceOverridden, setPriceOverridden] = useState(false);
@@ -1686,6 +1878,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
   const [error, setError] = useState("");
   const [warning, setWarning] = useState(null);
   const [numPadTarget, setNumPadTarget] = useState(null);
+  const priceLongPressRef = React.useRef(null);
 
   const rows = tierRows(product[tierKey]);
   const qtyNum = parseNum(qty) || 1;
@@ -1770,7 +1963,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
 
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-xs text-[#94A3B8]">السعر</span>
-        {!priceOverridden && (
+        {!priceOverridden && user?.role === "admin" && (
           <button onClick={() => { setManualPrice(displayPrice); setPriceOverridden(true); }} className="text-[11px] text-sky-400 font-semibold">تغيير</button>
         )}
       </div>
@@ -1779,7 +1972,16 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
           {manualPrice || "0"}
         </button>
       ) : (
-        <p className="text-center text-lg font-bold mb-3 tabular-nums" style={{ color: activeTiers(tierSettings).find((t) => t.id === tierKey)?.color || "#fff" }}>{displayPrice}</p>
+        <p
+          className="text-center text-lg font-bold mb-3 tabular-nums"
+          style={{ color: activeTiers(tierSettings).find((t) => t.id === tierKey)?.color || "#fff" }}
+          onTouchStart={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 600); }}
+          onTouchEnd={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
+          onMouseDown={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 600); }}
+          onMouseUp={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
+        >
+          {displayPrice}
+        </p>
       )}
 
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
@@ -1801,21 +2003,47 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, onAd
   );
 }
 
+function SaleReceiptPreview({ sale, onClose }) {
+  const pay = paymentLabel(sale);
+  return (
+    <Modal title="معاينة الفاتورة" accent="#0EA5E9" onClose={onClose}>
+      <div className="bg-white text-black rounded-lg p-4 mb-4 text-sm" dir="rtl" style={{ fontFamily: "Tahoma, Arial, sans-serif" }}>
+        <h3 className="text-center font-bold text-base mb-1">FaAroon</h3>
+        <p className="text-center text-xs text-gray-500 mb-1">فاتورة كاشير رقم {sale.invoiceNumber ?? ""}</p>
+        {sale.customerName && <p className="text-center text-xs text-gray-500 mb-1">الزبون: {sale.customerName}</p>}
+        <div className="border-t border-dashed border-gray-300 my-2" />
+        {sale.items.map((it, i) => (
+          <div key={i} className="flex justify-between text-xs py-0.5">
+            <span>{it.productName} × {it.qty}</span>
+            <span>{it.lineTotal}</span>
+          </div>
+        ))}
+        <div className="border-t border-dashed border-gray-300 my-2" />
+        <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{sale.total}</span></div>
+        <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => printSaleReceipt(sale)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
+          <Icon name="Printer" size={16} /> طباعة
+        </button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إغلاق</button>
+      </div>
+    </Modal>
+  );
+}
+
 function RenameCustomerModal({ initialName, customerNameOptions, onSave, onClose }) {
   const [name, setName] = useState(initialName || "");
   return (
     <Modal title="اسم الزبون" accent="#0EA5E9" onClose={onClose}>
-      <input
+      <AutocompleteInput
         value={name}
-        onChange={(e) => setName(e.target.value)}
-        list="cashier-customer-names-rename"
+        onChange={setName}
+        options={customerNameOptions}
         placeholder="اكتب اسم الزبون"
-        className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4"
+        className="mb-4"
         autoFocus
       />
-      <datalist id="cashier-customer-names-rename">
-        {customerNameOptions.map((n) => <option key={n} value={n} />)}
-      </datalist>
       <div className="flex gap-2">
         <button onClick={() => onSave(name.trim())} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
         <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
@@ -1828,7 +2056,7 @@ function makeEmptyInvoice(tierKey, label, customerName, invoiceNumber) {
   return { id: uid(), label, invoiceNumber, tierKey, customerName: customerName || "", items: [], suppressYellow: false, suppressRed: false };
 }
 
-function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, setView }) {
+function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, setView }) {
   const [invoices, setInvoices] = useState(() => (loadCashierInvoices()?.invoices) || []);
   const [activeId, setActiveId] = useState(() => {
     const saved = loadCashierInvoices();
@@ -1850,11 +2078,27 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const [confirmForm, setConfirmForm] = useState(EMPTY_CONFIRM_FORM);
   const [confirmError, setConfirmError] = useState("");
   const [lastSale, setLastSale] = useState(null);
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
   const [notFoundToast, setNotFoundToast] = useState(false);
   const [mergePrompt, setMergePrompt] = useState(null);
   const [priceDiffToast, setPriceDiffToast] = useState("");
   const [renamingCustomer, setRenamingCustomer] = useState(false);
+  const pressTimerRef = React.useRef(null);
+  const handleTabPressStart = (invId) => {
+    pressTimerRef.current = setTimeout(() => {
+      setActiveId(invId);
+      setRenamingCustomer(true);
+      pressTimerRef.current = null;
+    }, 550);
+  };
+  const handleTabPressEnd = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
   const [imageCache, setImageCache] = useState({});
+  const [recentSearches, setRecentSearches] = useState(() => loadRecentSearches());
   const [addedToast, setAddedToast] = useState("");
   const [cancelPrompt, setCancelPrompt] = useState(null);
   const [undoItem, setUndoItem] = useState(null);
@@ -1902,6 +2146,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     setActiveId(inv.id);
     setShowNewInvoicePicker(false);
     setCreatingInvoice(false);
+    playBeep("switch");
   };
 
   const updateActiveInvoice = (patch) => {
@@ -1923,6 +2168,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
   const commitNewItem = (payload) => {
     updateActiveInvoice({ items: [...activeInvoice.items, { id: uid(), ...payload }] });
+    playBeep("add");
     setAddedToast(`✓ اتضاف ${payload.productName}`);
     setTimeout(() => setAddedToast(""), 1500);
     finishAddOrScan();
@@ -1970,6 +2216,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     const item = activeInvoice.items.find((it) => it.id === id);
     updateActiveInvoice({ items: activeInvoice.items.filter((it) => it.id !== id) });
     if (item) {
+      playBeep("remove");
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
       setUndoItem({ item, invoiceId: activeInvoice.id });
       undoTimerRef.current = setTimeout(() => setUndoItem(null), 4000);
@@ -1981,6 +2228,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     setInvoices((list) => list.map((inv) => (inv.id === undoItem.invoiceId ? { ...inv, items: [...inv.items, undoItem.item] } : inv)));
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     setUndoItem(null);
+    playBeep("tap");
   };
 
   const adjustQty = (id, delta) => {
@@ -1991,6 +2239,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       removeFromCart(id);
       return;
     }
+    playBeep("tap");
     updateActiveInvoice({
       items: activeInvoice.items.map((it) => (it.id === id ? { ...it, qty: newQty, lineTotal: it.unitPrice * newQty } : it)),
     });
@@ -2007,9 +2256,11 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     setScanning(false);
     const match = products.find((p) => (p.barcodes && p.barcodes.includes(code)) || p.barcode === code);
     if (match) {
+      playBeep("scan");
       setPickerViaScan(true);
       setPickerProduct(match);
     } else {
+      playBeep("error");
       setNotFoundToast(true);
       setTimeout(() => setNotFoundToast(false), 2500);
     }
@@ -2027,6 +2278,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       id: uid(),
       employeeName: user.name,
       customerName: activeInvoice.customerName || null,
+      branchName: getTodayBranchName(attendance, user.name, branchSettings.branches),
       invoiceNumber: activeInvoice.invoiceNumber,
       tierKey: activeInvoice.tierKey,
       items: activeInvoice.items.map((it) => ({ productName: it.productName, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
@@ -2069,13 +2321,22 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
           {invoices.map((inv) => (
-            <button
-              key={inv.id}
-              onClick={() => setActiveId(inv.id)}
-              className={`shrink-0 rounded-xl px-3 py-2 text-xs font-bold ${activeId === inv.id ? "btn-sky" : "btn-ghost"}`}
-            >
-              {inv.customerName || inv.label}
-            </button>
+            <div key={inv.id} className={`shrink-0 rounded-xl flex items-center ${activeId === inv.id ? "btn-sky" : "btn-ghost"}`}>
+              <button
+                onClick={() => { setActiveId(inv.id); playBeep("switch"); }}
+                onTouchStart={() => handleTabPressStart(inv.id)}
+                onTouchEnd={handleTabPressEnd}
+                onMouseDown={() => handleTabPressStart(inv.id)}
+                onMouseUp={handleTabPressEnd}
+                onMouseLeave={handleTabPressEnd}
+                className="pr-3 pl-1.5 py-2 text-xs font-bold"
+              >
+                {inv.customerName || inv.label}
+              </button>
+              <button onClick={() => setCancelPrompt(inv.id)} className="pl-2 pr-1.5 py-2 opacity-70">
+                <Icon name="X" size={13} />
+              </button>
+            </div>
           ))}
           <button onClick={() => setShowNewInvoicePicker(true)} className="shrink-0 icon-btn rounded-xl px-3 py-2 flex items-center gap-1">
             <Icon name="Plus" size={15} /> فاتورة جديدة
@@ -2090,32 +2351,58 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
           <>
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xs font-bold text-sky-400 shrink-0">فاتورة #{activeInvoice.invoiceNumber ?? "?"}</span>
-              <span className="text-sm font-bold text-white flex-1">{activeInvoice.customerName || "بدون اسم زبون"}</span>
-              <button onClick={() => setRenamingCustomer(true)} className="icon-btn rounded-lg p-1.5"><Icon name="Pencil" size={14} /></button>
-              <button onClick={() => setCancelPrompt(activeInvoice.id)} className="icon-btn rounded-lg p-1.5 text-rose-400"><Icon name="Trash2" size={14} /></button>
+              <span className="text-xs text-[#64748B]">(اضغط مطول على اسم الفاتورة فوق عشان تغيّر الاسم)</span>
             </div>
 
             <div className="flex gap-2 mb-3">
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن منتج تضيفه..." className="field-input flex-1 rounded-xl px-4 py-2.5 text-sm" />
+              <div className="relative flex-1">
+                <Icon name="Search" size={16} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#64748B] pointer-events-none" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="ابحث عن منتج تضيفه..."
+                  className="field-input w-full rounded-xl pr-9 pl-9 py-2.5 text-sm"
+                />
+                {query && (
+                  <button onClick={() => setQuery("")} className="absolute top-1/2 -translate-y-1/2 left-3 text-[#64748B]">
+                    <Icon name="X" size={15} />
+                  </button>
+                )}
+              </div>
               <button onClick={() => { setPickerViaScan(true); setScanning(true); }} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
             </div>
+
+            {!query && recentSearches.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs text-[#94A3B8] mb-2">آخر عمليات بحث</p>
+                <div className="flex flex-wrap gap-2">
+                  {recentSearches.map((term) => (
+                    <button key={term} onClick={() => setQuery(term)} className="btn-ghost rounded-full px-3 py-1.5 text-xs font-bold flex items-center gap-1.5">
+                      <Icon name="Search" size={11} className="text-[#64748B]" />
+                      {term}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {!query && topProducts.length > 0 && (
               <div className="mb-4">
                 <p className="text-xs text-[#94A3B8] mb-2">الأكتر مبيعًا</p>
-                <div className="flex flex-wrap gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {topProducts.map((p) => (
                     <button
                       key={p.id}
                       onClick={() => { setPickerViaScan(false); setPickerProduct(p); }}
-                      className="btn-ghost rounded-full px-3 py-1.5 text-xs font-bold flex items-center gap-1.5"
+                      className="panel rounded-xl p-2.5 text-right flex items-center gap-2.5"
                     >
-                      {imageCache[p.id] ? (
-                        <img src={imageCache[p.id]} alt="" className="w-4 h-4 rounded-full object-cover" />
-                      ) : (
-                        <Icon name="Store" size={12} className="text-[#64748B]" />
-                      )}
-                      {p.name}
+                      <span className="w-12 h-12 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
+                        {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={20} className="text-[#475569]" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-bold text-xs text-white truncate">{p.name}</span>
+                        <span className="block font-bold text-sm text-emerald-400 tabular-nums mt-0.5">{tierBase(p[activeInvoice.tierKey])}</span>
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -2125,7 +2412,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             {results.length > 0 && (
               <div className="space-y-2 mb-4">
                 {results.map((p) => (
-                  <button key={p.id} onClick={() => { setPickerViaScan(false); setPickerProduct(p); }} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
+                  <button key={p.id} onClick={() => { setPickerViaScan(false); setPickerProduct(p); setRecentSearches(pushRecentSearch(query.trim())); }} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
                     <span className="flex items-center gap-2.5">
                       <span className="w-9 h-9 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
                         {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={16} className="text-[#475569]" />}
@@ -2158,20 +2445,22 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
               ))}
             </div>
 
-            {activeInvoice.items.length > 0 && (
-              <div className="panel rounded-2xl p-4 flex items-center justify-between mb-4">
-                <span className="text-sm text-[#94A3B8]">الإجمالي</span>
-                <span className="font-bold text-xl text-sky-400 tabular-nums">{total}</span>
-              </div>
-            )}
+            <div className="sticky bottom-3 z-10 mt-2">
+              {activeInvoice.items.length > 0 && (
+                <div className="panel rounded-2xl p-4 flex items-center justify-between mb-2 shadow-2xl">
+                  <span className="text-sm text-[#94A3B8]">الإجمالي</span>
+                  <span className="font-bold text-xl text-sky-400 tabular-nums">{total}</span>
+                </div>
+              )}
 
-            <button
-              disabled={activeInvoice.items.length === 0}
-              onClick={() => setShowCheckout(true)}
-              className="btn-emerald w-full rounded-xl py-3 font-bold flex items-center justify-center gap-2 disabled:opacity-40"
-            >
-              <Icon name="CheckCircle2" size={18} /> إتمام البيع
-            </button>
+              <button
+                disabled={activeInvoice.items.length === 0}
+                onClick={() => setShowCheckout(true)}
+                className="btn-emerald w-full rounded-xl py-3 font-bold flex items-center justify-center gap-2 disabled:opacity-40 shadow-xl"
+              >
+                <Icon name="CheckCircle2" size={18} /> إتمام البيع
+              </button>
+            </div>
           </>
         )}
 
@@ -2184,6 +2473,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             product={pickerProduct}
             invoice={activeInvoice}
             tierSettings={tierSettings}
+            user={user}
             onAdd={addToCart}
             onSuppressWarning={handleSuppressWarning}
             onClose={() => { setPickerProduct(null); setPickerViaScan(false); }}
@@ -2196,6 +2486,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             invoice={activeInvoice}
             existingItem={editingItem}
             tierSettings={tierSettings}
+            user={user}
             onUpdate={updateCartItem}
             onSuppressWarning={handleSuppressWarning}
             onClose={() => setEditingItem(null)}
@@ -2277,11 +2568,14 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
         {lastSale && (
           <Modal title="تم البيع بنجاح" accent="#34D399" onClose={() => setLastSale(null)}>
             <p className="text-sm text-[#CBD5E1] mb-4">الإجمالي: <span className="font-bold text-emerald-400 tabular-nums">{lastSale.total}</span></p>
-            <button onClick={() => printSaleReceipt(lastSale)} className="btn-sky w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-2">
-              <Icon name="Printer" size={16} /> طباعة الفاتورة
+            <button onClick={() => setShowReceiptPreview(true)} className="btn-sky w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-2">
+              <Icon name="Printer" size={16} /> معاينة وطباعة الفاتورة
             </button>
             <button onClick={() => setLastSale(null)} className="btn-ghost w-full rounded-xl py-2.5 font-bold">إغلاق</button>
           </Modal>
+        )}
+        {showReceiptPreview && lastSale && (
+          <SaleReceiptPreview sale={lastSale} onClose={() => setShowReceiptPreview(false)} />
         )}
       </div>
     </div>
@@ -2303,7 +2597,7 @@ function makeEmptyNewProduct(tiers) {
   };
 }
 
-function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, tierSettings, usingCachedProducts, setUsingCachedProducts, setView }) {
+function PricesScreen({ user, products, setProducts, productsLoading, changedToday, setChangedToday, categories, setCategories, tierSettings, usingCachedProducts, setUsingCachedProducts, branchSettings, setView }) {
   const canEditPrices = user.role === "admin" || !!user.permissions?.editPrices;
   const canManageProducts = user.role === "admin" || !!user.permissions?.manageProducts;
   const canDeleteProducts = user.role === "admin" || !!user.permissions?.deleteProducts;
@@ -2886,9 +3180,9 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
               <span className="font-bold text-white">{outOfStockProduct.name}</span> — اختار الفرع اللي المنتج خلص فيه، هيتبعت للأدمن على طول.
             </p>
             <div className="flex gap-2">
-              {DISPATCH_LOCATIONS.map((loc) => (
-                <button key={loc} onClick={() => reportOutOfStock(outOfStockProduct, loc)} className="btn-sky flex-1 rounded-xl py-2.5 text-sm font-bold">
-                  {loc}
+              {branchSettings.branches.map((b) => (
+                <button key={b.id} onClick={() => reportOutOfStock(outOfStockProduct, b.name)} className="btn-sky flex-1 rounded-xl py-2.5 text-sm font-bold">
+                  {b.name}
                 </button>
               ))}
             </div>
@@ -2971,9 +3265,8 @@ function validateOrder(form) {
   return null;
 }
 
-const DISPATCH_LOCATIONS = ["السنانية", "المطري"];
 
-function OrdersScreen({ user, orders, setOrders, setView }) {
+function OrdersScreen({ user, orders, setOrders, branchSettings, attendance, setView }) {
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState(EMPTY_ORDER_FORM);
   const [error, setError] = useState("");
@@ -3073,7 +3366,15 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الطلبات" onNav={setView} />
 
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
-        <button onClick={() => { setShowAdd(true); setError(""); }} className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-4">
+        <button
+          onClick={() => {
+            const todayBranch = getTodayBranchName(attendance, user.name, branchSettings.branches);
+            setForm({ ...EMPTY_ORDER_FORM, dispatchLocation: todayBranch || "" });
+            setShowAdd(true);
+            setError("");
+          }}
+          className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-4"
+        >
           <Icon name="Plus" size={18} /> إضافة أوردر جديد
         </button>
 
@@ -3130,22 +3431,20 @@ function OrdersScreen({ user, orders, setOrders, setView }) {
 
             <label className="block mb-3 text-right">
               <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">اسم المندوب</span>
-              <input list="rep-names" value={form.repName} onChange={(e) => setForm({ ...form, repName: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" placeholder="اسم المندوب" />
-              <datalist id="rep-names">{repNameOptions.map((n) => <option value={n} key={n} />)}</datalist>
+              <AutocompleteInput value={form.repName} onChange={(v) => setForm({ ...form, repName: v })} options={repNameOptions} placeholder="اسم المندوب" />
             </label>
 
             <label className="block mb-3 text-right">
               <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">المنطقة أو اسم المحل</span>
-              <input list="area-names" value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" placeholder="المنطقة أو اسم المحل" />
-              <datalist id="area-names">{areaOptions.map((n) => <option value={n} key={n} />)}</datalist>
+              <AutocompleteInput value={form.area} onChange={(v) => setForm({ ...form, area: v })} options={areaOptions} placeholder="المنطقة أو اسم المحل" />
             </label>
 
             <div className="mb-3">
               <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">مكان خروج الأوردر (اختياري)</span>
               <div className="flex gap-2">
-                {DISPATCH_LOCATIONS.map((loc) => (
-                  <button key={loc} onClick={() => setForm({ ...form, dispatchLocation: form.dispatchLocation === loc ? "" : loc })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.dispatchLocation === loc ? "active-sky" : ""}`}>
-                    {loc}
+                {branchSettings.branches.map((b) => (
+                  <button key={b.id} onClick={() => setForm({ ...form, dispatchLocation: form.dispatchLocation === b.name ? "" : b.name })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.dispatchLocation === b.name ? "active-sky" : ""}`}>
+                    {b.name}
                   </button>
                 ))}
               </div>
@@ -3368,6 +3667,31 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
 }
 
 // ---------- Reports screen (admin only) ----------
+function OrderReceiptPreview({ order, onClose }) {
+  const pay = paymentLabel(order);
+  return (
+    <Modal title="معاينة الفاتورة" accent="#0EA5E9" onClose={onClose}>
+      <div className="bg-white text-black rounded-lg p-4 mb-4 text-sm" dir="rtl" style={{ fontFamily: "Tahoma, Arial, sans-serif" }}>
+        <h3 className="text-center font-bold text-base mb-1">FaAroon</h3>
+        <p className="text-center text-xs text-gray-500 mb-2">فاتورة أوردر</p>
+        <div className="border-t border-dashed border-gray-300 my-2" />
+        <div className="flex justify-between text-xs py-0.5"><span>المندوب</span><span>{order.repName}</span></div>
+        <div className="flex justify-between text-xs py-0.5"><span>المنطقة</span><span>{order.area}</span></div>
+        {order.dispatchLocation && <div className="flex justify-between text-xs py-0.5"><span>مكان الخروج</span><span>{order.dispatchLocation}</span></div>}
+        <div className="border-t border-dashed border-gray-300 my-2" />
+        <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{order.price}</span></div>
+        <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => printOrderReceipt(order)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
+          <Icon name="Printer" size={16} /> طباعة
+        </button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إغلاق</button>
+      </div>
+    </Modal>
+  );
+}
+
 function ReportsScreen({ user, orders, sales, setView }) {
   const [tab, setTab] = useState("orders");
   const paidOrders = orders.filter((o) => o.paid).sort((a, b) => b.createdAt - a.createdAt);
@@ -3375,6 +3699,8 @@ function ReportsScreen({ user, orders, sales, setView }) {
   const sortedSales = [...sales].sort((a, b) => b.createdAt - a.createdAt);
   const salesTotal = sortedSales.reduce((s, sale) => s + sale.total, 0);
   const [expandedId, setExpandedId] = useState(null);
+  const [previewOrder, setPreviewOrder] = useState(null);
+  const [previewSale, setPreviewSale] = useState(null);
 
   return (
     <div className="shop-root">
@@ -3454,7 +3780,7 @@ function ReportsScreen({ user, orders, sales, setView }) {
                       <button onClick={() => setExpandedId(expanded ? null : o.id)} className="text-xs text-sky-400 font-semibold hover:underline">
                         {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
                       </button>
-                      <button onClick={() => printOrderReceipt(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+                      <button onClick={() => setPreviewOrder(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
                     </div>
                   </div>
                 );
@@ -3514,7 +3840,7 @@ function ReportsScreen({ user, orders, sales, setView }) {
                       <button onClick={() => setExpandedId(expanded ? null : s.id)} className="text-xs text-sky-400 font-semibold hover:underline">
                         {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
                       </button>
-                      <button onClick={() => printSaleReceipt(s)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+                      <button onClick={() => setPreviewSale(s)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
                     </div>
                   </div>
                 );
@@ -3523,6 +3849,8 @@ function ReportsScreen({ user, orders, sales, setView }) {
           </>
         )}
       </div>
+      {previewOrder && <OrderReceiptPreview order={previewOrder} onClose={() => setPreviewOrder(null)} />}
+      {previewSale && <SaleReceiptPreview sale={previewSale} onClose={() => setPreviewSale(null)} />}
     </div>
   );
 }
@@ -3536,11 +3864,14 @@ const ATTENDANCE_STATUS = {
   half_evening: { label: "نص يوم مسائي", color: "#FBBF24" },
 };
 
-function DayEditModal({ dateStr, existing, onSave, onClose }) {
+function DayEditModal({ dateStr, existing, branches, suggestedBranchId, onSave, onClose }) {
   const [status, setStatus] = useState(existing?.attendanceStatus || null);
+  const [branchId, setBranchId] = useState(existing?.branchId || suggestedBranchId || (branches[0]?.id ?? null));
+
+  const needsBranch = status === "present" || status === "half_morning" || status === "half_evening";
 
   const save = () => {
-    onSave({ attendanceStatus: status });
+    onSave({ attendanceStatus: status, branchId: needsBranch ? branchId : null });
   };
 
   const dayLabel = new Date(dateStr).toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
@@ -3560,6 +3891,25 @@ function DayEditModal({ dateStr, existing, onSave, onClose }) {
           </button>
         ))}
       </div>
+
+      {needsBranch && branches.length > 0 && (
+        <>
+          <p className="text-xs text-[#94A3B8] mb-2">الفرع</p>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {branches.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => setBranchId(b.id)}
+                className="toggle-pill rounded-xl py-2 text-xs font-bold"
+                style={branchId === b.id ? { background: "rgba(14,165,233,0.18)", color: "#38BDF8", borderColor: "#0EA5E9" } : {}}
+              >
+                {b.name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
       <button onClick={save} className="btn-emerald w-full rounded-xl py-2.5 font-bold">حفظ</button>
     </Modal>
   );
@@ -3594,7 +3944,7 @@ function WithdrawalEntryModal({ onSave, onClose }) {
 // Renders a real calendar grid for whichever month is selected — correctly
 // handles months of different lengths (28-31 days) and lines days up under the
 // right weekday column (week starts Saturday).
-function AttendanceCalendar({ employeeName, records, withdrawals, editable, onEditDay }) {
+function AttendanceCalendar({ employeeName, records, withdrawals, editable, branches, onEditDay }) {
   const [monthDate, setMonthDate] = useState(() => {
     const d = new Date();
     d.setDate(1);
@@ -3698,6 +4048,8 @@ function AttendanceCalendar({ employeeName, records, withdrawals, editable, onEd
         <DayEditModal
           dateStr={selectedDay}
           existing={byDate[selectedDay]}
+          branches={branches}
+          suggestedBranchId={suggestUsualBranch(records, employeeName)}
           onSave={(vals) => { onEditDay(selectedDay, vals); setSelectedDay(null); }}
           onClose={() => setSelectedDay(null)}
         />
@@ -3721,7 +4073,7 @@ function AttendanceCalendar({ employeeName, records, withdrawals, editable, onEd
   );
 }
 
-function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals, setWithdrawals, setView }) {
+function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals, setWithdrawals, branchSettings, setView }) {
   const isAdmin = user.role === "admin";
   const [selectedEmployee, setSelectedEmployee] = useState(isAdmin ? null : user.name);
   const [showWithdrawal, setShowWithdrawal] = useState(false);
@@ -3740,6 +4092,7 @@ function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals,
       employeeName,
       date: dateStr,
       attendanceStatus: vals.attendanceStatus,
+      branchId: vals.branchId || null,
       createdAt: existing ? existing.createdAt : Date.now(),
       updatedAt: Date.now(),
     };
@@ -3800,6 +4153,7 @@ function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals,
           records={attendance}
           withdrawals={withdrawals}
           editable={!isAdmin}
+          branches={branchSettings.branches}
           onEditDay={(dateStr, vals) => saveDay(selectedEmployee, dateStr, vals)}
         />
 
@@ -4151,7 +4505,64 @@ function InvoiceNumberSettingsModal({ invoiceNumberSettings, setInvoiceNumberSet
   );
 }
 
-function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, onDevReset, setView }) {
+function BranchSettingsModal({ branchSettings, setBranchSettings, onClose }) {
+  const [branches, setBranches] = useState(branchSettings.branches);
+  const [error, setError] = useState("");
+
+  const updateBranch = (id, name) => {
+    setBranches(branches.map((b) => (b.id === id ? { ...b, name } : b)));
+  };
+
+  const addBranch = () => {
+    setBranches([...branches, { id: uid(), name: "" }]);
+  };
+
+  const removeBranch = (id) => {
+    if (branches.length <= 1) return;
+    setBranches(branches.filter((b) => b.id !== id));
+  };
+
+  const save = () => {
+    if (branches.some((b) => !b.name.trim())) {
+      setError("لازم كل فرع يكون له اسم");
+      return;
+    }
+    setError("");
+    const updated = { ...branchSettings, branches };
+    setBranchSettings(updated);
+    settingsStore.upsert(updated);
+    onClose();
+  };
+
+  return (
+    <Modal title="فروع المحل" accent="#0EA5E9" onClose={onClose}>
+      <p className="text-xs text-[#94A3B8] mb-2">أسماء الفروع</p>
+      {branches.map((b) => (
+        <div key={b.id} className="flex items-center gap-2 mb-2">
+          <input
+            value={b.name}
+            onChange={(e) => updateBranch(b.id, e.target.value)}
+            placeholder="اسم الفرع"
+            className="field-input flex-1 rounded-xl px-3 py-2 text-sm"
+          />
+          {branches.length > 1 && (
+            <button onClick={() => removeBranch(b.id)} className="text-rose-400 shrink-0"><Icon name="Trash2" size={16} /></button>
+          )}
+        </div>
+      ))}
+      <button onClick={addBranch} className="w-full text-xs text-sky-400 font-semibold flex items-center justify-center gap-1 py-2 mb-3">
+        <Icon name="Plus" size={14} /> إضافة فرع جديد
+      </button>
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+      <div className="flex gap-2">
+        <button onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
+        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
+      </div>
+    </Modal>
+  );
+}
+
+function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset, setView }) {
   const isAdmin = user.role === "admin";
   const [openSection, setOpenSection] = useState(null);
 
@@ -4162,6 +4573,7 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
           { key: "dev", label: "دخول المطور", icon: "KeyRound" },
           { key: "tiers", label: "ميزات إضافية", icon: "Settings" },
           { key: "invoiceNumbering", label: "ترقيم الفواتير", icon: "Tag" },
+          { key: "branches", label: "فروع المحل", icon: "MapPin" },
         ]
       : []),
   ];
@@ -4183,6 +4595,15 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
             <Icon name="ChevronLeft" size={16} className="text-[#64748B]" />
           </button>
         ))}
+
+        <button
+          onClick={() => setView("logout")}
+          className="w-full rounded-2xl p-4 flex items-center gap-2 text-right mt-2"
+          style={{ background: "rgba(244,63,94,0.12)", border: "1px solid rgba(244,63,94,0.3)" }}
+        >
+          <Icon name="LogOut" size={16} className="text-rose-400" />
+          <span className="font-bold text-sm text-rose-400">تسجيل خروج</span>
+        </button>
       </div>
 
       {openSection === "password" && (
@@ -4196,6 +4617,9 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
       )}
       {openSection === "invoiceNumbering" && (
         <InvoiceNumberSettingsModal invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} onClose={() => setOpenSection(null)} />
+      )}
+      {openSection === "branches" && (
+        <BranchSettingsModal branchSettings={branchSettings} setBranchSettings={setBranchSettings} onClose={() => setOpenSection(null)} />
       )}
     </div>
   );
@@ -4385,6 +4809,7 @@ function App() {
   const [sales, setSales] = useState([]);
   const [tierSettings, setTierSettings] = useState(DEFAULT_TIER_SETTINGS);
   const [invoiceNumberSettings, setInvoiceNumberSettings] = useState(DEFAULT_INVOICE_NUMBER_SETTINGS);
+  const [branchSettings, setBranchSettings] = useState(DEFAULT_BRANCH_SETTINGS);
   const [screen, setScreen] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
   const [pendingStatus, setPendingStatus] = useState("pending");
@@ -4493,6 +4918,10 @@ function App() {
       const savedInvoiceNumberSettings = loadedSettings && loadedSettings.find((s) => s.id === "invoice_number_settings");
       if (savedInvoiceNumberSettings) {
         setInvoiceNumberSettings({ ...DEFAULT_INVOICE_NUMBER_SETTINGS, ...savedInvoiceNumberSettings });
+      }
+      const savedBranchSettings = loadedSettings && loadedSettings.find((s) => s.id === "branch_settings");
+      if (savedBranchSettings && savedBranchSettings.branches && savedBranchSettings.branches.length) {
+        setBranchSettings({ ...DEFAULT_BRANCH_SETTINGS, ...savedBranchSettings });
       }
 
       // Restore session — works once this is a real web page or the APK.
@@ -4740,16 +5169,17 @@ function App() {
           tierSettings={tierSettings}
           usingCachedProducts={usingCachedProducts}
           setUsingCachedProducts={setUsingCachedProducts}
+          branchSettings={branchSettings}
           setView={nav}
         />
       )}
-      {screen === "orders" && currentUser && <OrdersScreen user={currentUser} orders={orders} setOrders={setOrders} setView={nav} />}
+      {screen === "orders" && currentUser && <OrdersScreen user={currentUser} orders={orders} setOrders={setOrders} branchSettings={branchSettings} attendance={attendance} setView={nav} />}
       {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
       {screen === "reports" && currentUser && currentUser.role === "admin" && <ReportsScreen user={currentUser} orders={orders} sales={sales} setView={nav} />}
       {screen === "stock-alerts" && currentUser && currentUser.role === "admin" && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
-      {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} setView={nav} />}
-      {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} onDevReset={performFullReset} setView={nav} />}
-      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} usingCachedProducts={usingCachedProducts} setView={nav} />}
+      {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} branchSettings={branchSettings} setView={nav} />}
+      {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} branchSettings={branchSettings} setBranchSettings={setBranchSettings} onDevReset={performFullReset} setView={nav} />}
+      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} usingCachedProducts={usingCachedProducts} attendance={attendance} branchSettings={branchSettings} setView={nav} />}
       {screen === "admin" && currentUser && currentUser.role === "admin" && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
