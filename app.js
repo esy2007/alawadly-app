@@ -88,43 +88,159 @@ function notifyStoreError(collectionName, detail) {
   try { window.dispatchEvent(new CustomEvent("store-error", { detail: { collectionName, detail } })); } catch {}
 }
 
-async function doAuth() {
-  if (authState.refreshToken) {
-    try {
-      const res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `grant_type=refresh_token&refresh_token=${authState.refreshToken}`,
-      });
-      if (res.ok) {
-        const data = await res.json();
-        authState = {
-          idToken: data.id_token,
-          refreshToken: data.refresh_token,
-          expiresAt: Date.now() + Number(data.expires_in) * 1000,
-        };
-        return authState.idToken;
-      }
-    } catch {
-      // fall through to a fresh anonymous sign-in
-    }
+// ---------- Real per-employee sign-in (replaces the old blanket Anonymous
+// Auth). Each employee gets an actual Firebase Auth account behind the
+// scenes — the login screen still only asks for name + password like
+// before, nothing changes for them. The "email" Firebase needs is
+// generated automatically from their name (deterministic hash, ASCII-safe,
+// works with Arabic names) — they never see or type it. ----------
+function simpleHash(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
+  return (h >>> 0).toString(36);
+}
+
+function authEmailForName(name) {
+  const norm = normalizeArabic(name).trim().toLowerCase();
+  return `u${simpleHash(norm)}@${FIREBASE_PROJECT_ID}.firebaseapp.com`;
+}
+
+async function signInWithEmailPassword(email, password) {
+  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+  if (!res.ok) return { ok: false, status: res.status, detail: await readErrorDetail(res) };
+  const data = await res.json();
+  return { ok: true, data };
+}
+
+async function signUpWithEmailPassword(email, password) {
+  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+  if (!res.ok) return { ok: false, status: res.status, detail: await readErrorDetail(res) };
+  const data = await res.json();
+  return { ok: true, data };
+}
+
+// Updates the real Firebase password for the currently signed-in user.
+async function updateOwnPassword(newPassword) {
+  const token = await ensureAuth();
+  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${FIREBASE_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idToken: token, password: newPassword, returnSecureToken: true }),
+  });
+  if (!res.ok) return { ok: false, detail: await readErrorDetail(res) };
+  const data = await res.json();
+  setAuthTokens(data);
+  return { ok: true };
+}
+
+// Applies a fresh sign-in/sign-up response to the live session: updates the
+// in-memory token used by every Firestore call, and persists the refresh
+// token so re-opening the app later doesn't ask to log in again.
+function setAuthTokens(data) {
+  authState = {
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    expiresAt: Date.now() + Number(data.expiresIn) * 1000,
+  };
+  try {
+    localStorage.setItem(SESSION_REFRESH_KEY, authState.refreshToken);
+  } catch {}
+}
+
+function clearAuthTokens() {
+  authState = { idToken: null, refreshToken: null, expiresAt: 0 };
+  try { localStorage.removeItem(SESSION_REFRESH_KEY); } catch {}
+}
+
+// Called once at boot if a refresh token was saved from a previous login —
+// primes authState so the very first ensureAuth() call silently exchanges
+// it for a fresh idToken instead of requiring the person to log in again.
+function restoreRefreshToken(token) {
+  authState = { idToken: null, refreshToken: token, expiresAt: 0 };
+}
+
+// One-time helper for the admin migration tool: gives an existing legacy
+// user (still on the old plaintext-password system) a real Firebase Auth
+// account, reusing their current password so nothing changes for them.
+async function migrateUserToRealAuth(user) {
+  const email = authEmailForName(user.name);
+  let res = await signUpWithEmailPassword(email, user.password);
+  if (!res.ok && res.detail && res.detail.includes("EMAIL_EXISTS")) {
+    // Already migrated in a previous, interrupted run — just recover the uid.
+    res = await signInWithEmailPassword(email, user.password);
+  }
+  if (!res.ok) return { ok: false, detail: res.detail };
+  return { ok: true, authUid: res.data.localId, authEmail: email };
+}
+
+// The migration tool runs BEFORE anyone can sign in for real (that's the
+// whole point — it's what creates everyone's real accounts in the first
+// place), so it can't use ensureAuth()/authState like everything else.
+// It needs Anonymous Auth temporarily re-enabled in the Firebase console
+// just for this one run, to read the legacy user list and write the
+// results back — this token is used only here, never stored in authState.
+async function getMigrationBootstrapToken() {
   const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ returnSecureToken: true }),
   });
+  if (!res.ok) return { ok: false, detail: await readErrorDetail(res) };
+  const data = await res.json();
+  return { ok: true, token: data.idToken };
+}
+
+async function migrationLoadUsers(bootstrapToken) {
+  const res = await fetch(`${FIRESTORE_BASE}/users_col?pageSize=300`, {
+    headers: { Authorization: `Bearer ${bootstrapToken}` },
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return (data.documents || []).map((d) => fromFirestoreFields(d.fields));
+}
+
+async function migrationSaveUser(bootstrapToken, obj) {
+  const res = await fetch(`${FIRESTORE_BASE}/users_col/${obj.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${bootstrapToken}` },
+    body: JSON.stringify({ fields: toFirestoreFields(obj) }),
+  });
+  return res.ok;
+}
+
+async function doAuth() {
+  if (!authState.refreshToken) {
+    throw new Error("not signed in");
+  }
+  const res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=refresh_token&refresh_token=${authState.refreshToken}`,
+  });
   if (!res.ok) {
+    clearAuthTokens();
     const detail = await readErrorDetail(res);
     notifyStoreError("تسجيل الدخول (Auth)", detail);
     throw new Error(`auth failed: ${detail}`);
   }
   const data = await res.json();
   authState = {
-    idToken: data.idToken,
-    refreshToken: data.refreshToken,
-    expiresAt: Date.now() + Number(data.expiresIn) * 1000,
+    idToken: data.id_token,
+    refreshToken: data.refresh_token,
+    expiresAt: Date.now() + Number(data.expires_in) * 1000,
   };
+  try { localStorage.setItem(SESSION_REFRESH_KEY, authState.refreshToken); } catch {}
   return authState.idToken;
 }
 
@@ -520,6 +636,8 @@ async function batchGetImages(ids) {
 // actual target environment.
 const SESSION_KEY = "alawadly_session";
 
+const SESSION_REFRESH_KEY = "alawadly_auth_refresh";
+
 function saveSession(user) {
   try { localStorage.setItem(SESSION_KEY, JSON.stringify({ id: user.id })); } catch {}
 }
@@ -533,8 +651,16 @@ function loadSessionUserId() {
   }
 }
 
+// Reads a previously-saved refresh token (if any) so the app can silently
+// re-authenticate the same employee on next open, without asking them to
+// type their password again.
+function loadSavedRefreshToken() {
+  try { return localStorage.getItem(SESSION_REFRESH_KEY); } catch { return null; }
+}
+
 function clearSession() {
   try { localStorage.removeItem(SESSION_KEY); } catch {}
+  clearAuthTokens();
 }
 
 // Keeps open cashier invoices (tabs/carts) on the device so they survive
@@ -1004,11 +1130,19 @@ function Modal({ title, accent = "#38BDF8", onClose, children }) {
 function LoginScreen({ onLogin, goRegister, error, loading }) {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
+  const [showMigration, setShowMigration] = useState(false);
+  const logoPressRef = React.useRef(null);
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm fade-up">
         <div className="flex flex-col items-center mb-6">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-3 shadow-lg header-bar">
+          <div
+            className="w-16 h-16 rounded-2xl flex items-center justify-center mb-3 shadow-lg header-bar"
+            onTouchStart={() => { logoPressRef.current = setTimeout(() => setShowMigration(true), 1500); }}
+            onTouchEnd={() => clearTimeout(logoPressRef.current)}
+            onMouseDown={() => { logoPressRef.current = setTimeout(() => setShowMigration(true), 1500); }}
+            onMouseUp={() => clearTimeout(logoPressRef.current)}
+          >
             <Icon name="Store" size={30} className="text-white" />
           </div>
           <h1 className="font-extrabold text-2xl text-sky-400 tracking-wide">FaAroon</h1>
@@ -1035,6 +1169,7 @@ function LoginScreen({ onLogin, goRegister, error, loading }) {
           </button>
         </div>
       </div>
+      {showMigration && <MigrationToolModal onClose={() => setShowMigration(false)} />}
     </div>
   );
 }
@@ -1770,6 +1905,104 @@ function pickBestRowForQty(rows, qty) {
     }
   });
   return best;
+}
+
+// ---------- One-time migration: legacy plaintext-password accounts →
+// real Firebase Auth accounts. Reached only from a hidden long-press on
+// the login screen logo, gated by the same developer password used for
+// the data-reset tool. Needs Anonymous Auth temporarily re-enabled in the
+// Firebase console just for this one run — see the handoff doc.
+function MigrationToolModal({ onClose }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [stage, setStage] = useState("password"); // password | running | done
+  const [log, setLog] = useState([]);
+  const [summary, setSummary] = useState(null);
+
+  const checkPassword = () => {
+    if (password !== DEV_RESET_PASSWORD) {
+      setError("كلمة السر غلط");
+      return;
+    }
+    setError("");
+    setStage("running");
+    runMigration();
+  };
+
+  const runMigration = async () => {
+    const boot = await getMigrationBootstrapToken();
+    if (!boot.ok) {
+      setLog((l) => [...l, `فشل الاتصال: ${boot.detail}`]);
+      setSummary({ ok: 0, failed: 0, skipped: 0 });
+      setStage("done");
+      return;
+    }
+    const users = await migrationLoadUsers(boot.token);
+    if (!users) {
+      setLog((l) => [...l, "مقدرتش أقرا قائمة المستخدمين — تأكد إن Anonymous مفعّلة في Firebase Console"]);
+      setSummary({ ok: 0, failed: 0, skipped: 0 });
+      setStage("done");
+      return;
+    }
+    let ok = 0, failed = 0, skipped = 0;
+    for (const u of users) {
+      if (u.authUid) {
+        skipped++;
+        setLog((l) => [...l, `${u.name}: منقول قبل كده، اتخطى`]);
+        continue;
+      }
+      const res = await migrateUserToRealAuth(u);
+      if (!res.ok) {
+        failed++;
+        setLog((l) => [...l, `${u.name}: فشل — ${res.detail}`]);
+        continue;
+      }
+      const saved = await migrationSaveUser(boot.token, { ...u, authUid: res.authUid, authEmail: res.authEmail });
+      if (saved) {
+        ok++;
+        setLog((l) => [...l, `${u.name}: تم بنجاح`]);
+      } else {
+        failed++;
+        setLog((l) => [...l, `${u.name}: اتعمل له حساب بس فشل حفظ البيانات`]);
+      }
+    }
+    setSummary({ ok, failed, skipped });
+    setStage("done");
+  };
+
+  return (
+    <Modal title="نقل المستخدمين لحسابات حقيقية" accent="#38BDF8" onClose={onClose}>
+      {stage === "password" ? (
+        <>
+          <p className="text-xs text-[#94A3B8] mb-3 leading-6">أداة تشغّل مرة واحدة بس. لازم Anonymous يكون مفعّل مؤقتًا في Firebase Console قبل ما تكمل.</p>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="كلمة سر المطور"
+            className="field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
+          />
+          {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+          <button onClick={checkPassword} className="btn-sky w-full rounded-xl py-2.5 font-bold">دخول</button>
+        </>
+      ) : stage === "running" ? (
+        <div className="flex flex-col items-center py-6 gap-3">
+          <Icon name="Loader2" size={28} className="animate-spin text-sky-400" />
+          <p className="text-sm text-[#94A3B8]">جاري النقل...</p>
+        </div>
+      ) : (
+        <>
+          <p className="text-sm text-emerald-300 mb-2">
+            تم: {summary.ok} — اتخطى (منقول قبل كده): {summary.skipped} — فشل: {summary.failed}
+          </p>
+          <div className="max-h-48 overflow-y-auto text-xs text-[#94A3B8] space-y-1 mb-4 leading-6">
+            {log.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+          <button onClick={onClose} className="btn-sky w-full rounded-xl py-2.5 font-bold">تمام</button>
+        </>
+      )}
+    </Modal>
+  );
 }
 
 function TierColorButton({ color, active, onClick, label }) {
@@ -4286,8 +4519,9 @@ function ChangePasswordModal({ user, users, setUsers, onClose }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const save = () => {
+  const save = async () => {
     if (!newPassword || newPassword.length < 4) {
       setError("كلمة السر لازم تكون ٤ حروف على الأقل");
       return;
@@ -4296,9 +4530,13 @@ function ChangePasswordModal({ user, users, setUsers, onClose }) {
       setError("كلمتا السر مش متطابقتين");
       return;
     }
-    const updated = { ...user, password: newPassword };
-    setUsers(users.map((u) => (u.id === user.id ? updated : u)));
-    usersStore.upsert(updated);
+    setBusy(true);
+    const res = await updateOwnPassword(newPassword);
+    setBusy(false);
+    if (!res.ok) {
+      setError("حصلت مشكلة، جرب تاني");
+      return;
+    }
     onClose();
   };
 
@@ -4308,7 +4546,7 @@ function ChangePasswordModal({ user, users, setUsers, onClose }) {
       <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="تأكيد كلمة السر" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <div className="flex gap-2">
-        <button onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
+        <button disabled={busy} onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold disabled:opacity-60">حفظ</button>
         <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
       </div>
     </Modal>
@@ -4866,8 +5104,25 @@ function App() {
 
   useEffect(() => {
     (async () => {
+      // Nothing can be read from Firestore anymore without being signed in
+      // for real (Anonymous Auth is gone). If we have a saved refresh token
+      // from a previous login, use it to silently pick the session back up;
+      // otherwise there's nothing to preload — just show the login screen.
+      const savedRefresh = loadSavedRefreshToken();
+      if (!savedRefresh) {
+        setBooting(false);
+        return;
+      }
+      restoreRefreshToken(savedRefresh);
+
       const storedUsers = await usersStore.loadAll();
-      let u = storedUsers || [];
+      if (!storedUsers) {
+        // Refresh token was invalid/expired — session is gone, back to login.
+        clearSession();
+        setBooting(false);
+        return;
+      }
+      let u = storedUsers;
       if (!u.some((x) => x.role === "admin")) {
         u = [...u, DEFAULT_ADMIN];
         usersStore.upsert(DEFAULT_ADMIN);
@@ -4988,17 +5243,37 @@ function App() {
     return () => clearInterval(interval);
   }, [currentUser, orders]);
 
-  const handleLogin = (name, password) => {
+  const handleLogin = async (name, password) => {
     setAuthError("");
     if (!name || !password) {
       setAuthError("من فضلك اكتب الاسم وكلمة المرور");
       return;
     }
     setAuthLoading(true);
-    const found = users.find((u) => namesMatch(u.name, name));
-    setAuthLoading(false);
-    if (!found || found.password !== password) {
+    const email = authEmailForName(name);
+    const signIn = await signInWithEmailPassword(email, password);
+    if (!signIn.ok) {
+      setAuthLoading(false);
       setAuthError("الاسم أو كلمة المرور غلط");
+      return;
+    }
+    setAuthTokens(signIn.data);
+    const storedUsers = await usersStore.loadAll();
+    setAuthLoading(false);
+    if (!storedUsers) {
+      setAuthError("حصلت مشكلة في الاتصال، جرب تاني");
+      return;
+    }
+    let u = storedUsers;
+    if (!u.some((x) => x.role === "admin")) {
+      u = [...u, DEFAULT_ADMIN];
+      usersStore.upsert(DEFAULT_ADMIN);
+    }
+    setUsers(u);
+    const found = u.find((x) => x.authUid === signIn.data.localId) || u.find((x) => namesMatch(x.name, name));
+    if (!found) {
+      setAuthError("الاسم أو كلمة المرور غلط");
+      clearSession();
       return;
     }
     if (found.status !== "approved") {
@@ -5012,7 +5287,7 @@ function App() {
     setScreen("menu");
   };
 
-  const handleRegister = (name, password, confirm) => {
+  const handleRegister = async (name, password, confirm) => {
     setAuthError("");
     if (!name || !password) {
       setAuthError("من فضلك املأ كل الحقول");
@@ -5027,7 +5302,23 @@ function App() {
       return;
     }
     setAuthLoading(true);
-    const newUser = { id: uid(), name, password, role: "employee", status: "pending", permissions: { manageProducts: false, deleteProducts: false, editPrices: false } };
+    const email = authEmailForName(name);
+    const signUp = await signUpWithEmailPassword(email, password);
+    if (!signUp.ok) {
+      setAuthLoading(false);
+      setAuthError("حصلت مشكلة في إنشاء الحساب، جرب تاني");
+      return;
+    }
+    setAuthTokens(signUp.data);
+    const newUser = {
+      id: uid(),
+      name,
+      authUid: signUp.data.localId,
+      authEmail: email,
+      role: "employee",
+      status: "pending",
+      permissions: { manageProducts: false, deleteProducts: false, editPrices: false },
+    };
     setUsers([...users, newUser]);
     usersStore.upsert(newUser);
     setAuthLoading(false);
