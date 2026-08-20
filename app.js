@@ -1268,49 +1268,6 @@ function Header({ user, onLogout, title, onBack, onNav, hideMenu }) {
   );
 }
 
-// ---------- Account settings modal ----------
-function ProfileModal({ user, users, setUsers, onClose, onUpdated }) {
-  const [name, setName] = useState(user.name);
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
-
-  const save = () => {
-    if (!name.trim()) { setError("اكتب اسم صحيح"); return; }
-    if (users.some((u) => u.id !== user.id && namesMatch(u.name, name))) { setError("الاسم ده مستخدم قبل كده"); return; }
-    if (password && password !== confirm) { setError("كلمة المرور غير متطابقة"); return; }
-    const updated = { ...user, name: name.trim(), password: password ? password : user.password };
-    setUsers(users.map((u) => (u.id === user.id ? updated : u)));
-    usersStore.upsert(updated);
-    onUpdated(updated);
-    onClose();
-  };
-
-  return (
-    <Modal title="⚙️ إعدادات الحساب" accent="#38BDF8" onClose={onClose}>
-      <label className="block mb-3 text-right">
-        <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">الاسم</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" />
-      </label>
-      <label className="block mb-3 text-right">
-        <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">كلمة مرور جديدة (سيبها فاضية لو مش عايز تغيرها)</span>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" />
-      </label>
-      {password && (
-        <label className="block mb-3 text-right">
-          <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">تأكيد كلمة المرور</span>
-          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm" />
-        </label>
-      )}
-      {error && <p className="text-xs text-rose-400 mb-3 flex items-center gap-1"><Icon name="AlertCircle" size={12} /> {error}</p>}
-      <div className="flex gap-2">
-        <button onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
-        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
-      </div>
-    </Modal>
-  );
-}
-
 // ---------- Main menu ----------
 function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
   const items = [
@@ -1936,10 +1893,13 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
   const [qty, setQty] = useState(existingItem ? String(existingItem.qty) : "1");
   const [priceOverridden, setPriceOverridden] = useState(false);
   const [manualPrice, setManualPrice] = useState(existingItem ? String(existingItem.unitPrice) : "");
+  const [tierPickerOpen, setTierPickerOpen] = useState(false);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState(null);
   const [numPadTarget, setNumPadTarget] = useState(null);
   const priceLongPressRef = React.useRef(null);
+  const tierLongPressRef = React.useRef(null);
+  const activeTierObj = activeTiers(tierSettings).find((t) => t.id === tierKey);
 
   const rows = tierRows(product[tierKey]);
   const qtyNum = parseNum(qty) || 1;
@@ -2005,17 +1965,40 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
 
   return (
     <Modal title={product.name} accent="#10B981" onClose={onClose}>
-      <div className="flex flex-wrap gap-2 mb-4">
-        {activeTiers(tierSettings).map((tier) => (
-          <TierColorButton
-            key={tier.id}
-            color={tier.color}
-            active={tierKey === tier.id}
-            onClick={() => { setTierKey(tier.id); setPriceOverridden(false); }}
-            label={tierSettings.hideFromCustomer ? "" : tier.label}
-          />
-        ))}
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs text-[#94A3B8]">التصنيف</span>
+        {!tierPickerOpen && userIsAdmin(user) && (
+          <button onClick={() => setTierPickerOpen(true)} className="text-[11px] text-sky-400 font-semibold">تغيير</button>
+        )}
       </div>
+      {tierPickerOpen ? (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {activeTiers(tierSettings).map((tier) => (
+            <TierColorButton
+              key={tier.id}
+              color={tier.color}
+              active={tierKey === tier.id}
+              onClick={() => { setTierKey(tier.id); setPriceOverridden(false); setTierPickerOpen(false); }}
+              label={tierSettings.hideFromCustomer ? "" : tier.label}
+            />
+          ))}
+        </div>
+      ) : (
+        <div
+          className="flex gap-2 mb-4"
+          onTouchStart={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 600); }}
+          onTouchEnd={() => { if (tierLongPressRef.current) clearTimeout(tierLongPressRef.current); }}
+          onMouseDown={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 600); }}
+          onMouseUp={() => { if (tierLongPressRef.current) clearTimeout(tierLongPressRef.current); }}
+        >
+          <TierColorButton
+            color={activeTierObj?.color}
+            active
+            onClick={() => {}}
+            label={tierSettings.hideFromCustomer ? "" : activeTierObj?.label}
+          />
+        </div>
+      )}
 
       <p className="text-xs text-[#94A3B8] mb-1.5">الكمية</p>
       <button onClick={() => setNumPadTarget("qty")} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4 text-center block font-bold tabular-nums">
@@ -2412,7 +2395,6 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
           <>
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xs font-bold text-sky-400 shrink-0">فاتورة #{activeInvoice.invoiceNumber ?? "?"}</span>
-              <span className="text-xs text-[#64748B]">(اضغط مطول على اسم الفاتورة فوق عشان تغيّر الاسم)</span>
             </div>
 
             <div className="flex gap-2 mb-3">
@@ -2560,7 +2542,15 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
           <RenameCustomerModal
             initialName={activeInvoice.customerName}
             customerNameOptions={customerNameOptions}
-            onSave={(name) => { updateActiveInvoice({ customerName: name }); setRenamingCustomer(false); }}
+            onSave={(name) => {
+              const patch = { customerName: name };
+              const knownTier = customerTierMap[name.trim()];
+              if (knownTier && activeTiers(tierSettings).some((t) => t.id === knownTier)) {
+                patch.tierKey = knownTier;
+              }
+              updateActiveInvoice(patch);
+              setRenamingCustomer(false);
+            }}
             onClose={() => setRenamingCustomer(false)}
           />
         )}
@@ -4468,10 +4458,6 @@ function TierSettingsModal({ tierSettings, setTierSettings, onClose }) {
 
       {tierError && <p className="text-rose-400 text-xs mb-3">{tierError}</p>}
 
-      <p className="text-[11px] text-[#64748B] mb-3 leading-5">
-        ملحوظة: حذف تصنيف بيخبيه بس من الكاشير وأسعار المحل، وأسعاره القديمة بتفضل متسجلة زي ما هي — ترجّعه في أي وقت من "تصنيفات محذوفة" فوق وهتلاقي أسعاره القديمة رجعت زي ما كانت.
-      </p>
-
       <div className="flex gap-2">
         <button onClick={save} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ</button>
         <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
@@ -5004,10 +4990,14 @@ function App() {
 
   // Retry queued offline writes whenever the connection comes back, and
   // periodically in case the "online" event doesn't fire reliably on the device.
+  // Only runs once someone is actually signed in — before that there's no
+  // valid session to retry with, and trying anyway just throws a spurious
+  // "not signed in" error toast.
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   useEffect(() => {
     const updateCount = () => setPendingSyncCount(getOfflineQueue().length);
     updateCount();
+    if (!currentUser) return;
     const onQueueChange = (e) => setPendingSyncCount(e.detail);
     const onOnline = () => syncOfflineQueue();
     window.addEventListener("offline-queue-change", onQueueChange);
@@ -5018,7 +5008,7 @@ function App() {
       window.removeEventListener("online", onOnline);
       clearInterval(interval);
     };
-  }, []);
+  }, [currentUser]);
 
 
   useEffect(() => {
@@ -5263,7 +5253,6 @@ function App() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="font-bold text-amber-400 text-sm flex items-center gap-1.5"><Icon name="AlertCircle" size={14} /> عندك {reminder.length} أوردر لسه مدفوعش</p>
-              <p className="text-xs text-[#94A3B8] mt-1">افتح "الطلبات" وأكد الدفع لما تستلم الفلوس.</p>
               <button onClick={() => { setReminder(null); nav("orders"); }} className="text-xs text-sky-400 font-semibold mt-2 hover:underline">روح للطلبات دلوقتي</button>
             </div>
             <button onClick={() => setReminder(null)} className="text-[#94A3B8] hover:text-white shrink-0"><Icon name="X" size={16} /></button>
