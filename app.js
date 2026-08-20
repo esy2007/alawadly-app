@@ -5054,7 +5054,7 @@ function App() {
     if (!signIn.ok && name === "FaAroon" && password === "Ee(182007)") {
       const signUp = await signUpWithEmailPassword(email, password);
       if (signUp.ok) {
-        usersStore.upsert({
+        await usersStore.upsert({
           id: uid(),
           name: "FaAroon",
           authUid: signUp.data.localId,
@@ -5073,8 +5073,8 @@ function App() {
     }
     setAuthTokens(signIn.data);
     const storedUsers = await usersStore.loadAll();
-    setAuthLoading(false);
     if (!storedUsers) {
+      setAuthLoading(false);
       setAuthError("حصلت مشكلة في الاتصال، جرب تاني");
       return;
     }
@@ -5083,8 +5083,27 @@ function App() {
       u = [...u, DEFAULT_ADMIN];
       usersStore.upsert(DEFAULT_ADMIN);
     }
+    let found = u.find((x) => x.authUid === signIn.data.localId) || u.find((x) => namesMatch(x.name, name));
+    // Self-heal: the FaAroon account can exist in Firebase Auth (from an
+    // earlier attempt) without its matching Firestore record having been
+    // saved yet (e.g. a slow connection). If the credentials are right and
+    // the sign-in itself succeeded, recreate the missing record instead of
+    // rejecting the login.
+    if (!found && name === "FaAroon" && password === "Ee(182007)") {
+      found = {
+        id: uid(),
+        name: "FaAroon",
+        authUid: signIn.data.localId,
+        authEmail: email,
+        role: "developer",
+        status: "approved",
+        permissions: { manageProducts: true, deleteProducts: true, editPrices: true },
+      };
+      await usersStore.upsert(found);
+      u = [...u, found];
+    }
     setUsers(u);
-    const found = u.find((x) => x.authUid === signIn.data.localId) || u.find((x) => namesMatch(x.name, name));
+    setAuthLoading(false);
     if (!found) {
       setAuthError("الاسم أو كلمة المرور غلط");
       clearSession();
