@@ -745,29 +745,6 @@ function playBeep(type = "success") {
 
 const DATA_CACHE_PREFIX = "faaroon_cache_";
 
-const RECENT_SEARCHES_KEY = "faaroon_recent_searches";
-
-function loadRecentSearches() {
-  try {
-    const raw = localStorage.getItem(RECENT_SEARCHES_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function pushRecentSearch(term) {
-  if (!term || !term.trim()) return [];
-  try {
-    const existing = loadRecentSearches().filter((t) => t !== term);
-    const updated = [term, ...existing].slice(0, 6);
-    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
-    return updated;
-  } catch {
-    return loadRecentSearches();
-  }
-}
-
 function saveDataCache(key, data) {
   try { localStorage.setItem(DATA_CACHE_PREFIX + key, JSON.stringify(data)); } catch {}
 }
@@ -2268,7 +2245,6 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     }
   };
   const [imageCache, setImageCache] = useState({});
-  const [recentSearches, setRecentSearches] = useState(() => loadRecentSearches());
   const [addedToast, setAddedToast] = useState("");
   const [cancelPrompt, setCancelPrompt] = useState(null);
   const [undoItem, setUndoItem] = useState(null);
@@ -2528,7 +2504,8 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   return (
     <div className="shop-root">
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الكاشير" onNav={setView} />
-      <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-6">
+      <div className="max-w-lg lg:max-w-4xl mx-auto px-4 py-2 fade-up pb-6 lg:flex lg:gap-6 lg:items-start">
+        <div className="lg:flex-1 min-w-0">
         {usingCachedProducts && (
           <div className="bg-amber-950/40 border border-amber-800 rounded-xl px-3 py-2 mb-3 text-xs text-amber-300 font-bold text-center">
             📴 مفيش اتصال بالنت — الأسعار دي آخر نسخة محفوظة على الفون
@@ -2570,11 +2547,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         {activeInvoice && (
           <>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-xs font-bold text-sky-400 shrink-0">فاتورة #{activeInvoice.invoiceNumber ?? "?"}</span>
-            </div>
-
-            <div className="flex gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-4">
               <div className="relative flex-1">
                 <Icon name="Search" size={16} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#64748B] pointer-events-none" />
                 <input
@@ -2589,50 +2562,14 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
                   </button>
                 )}
               </div>
+              <span className="text-xs font-bold text-sky-400 shrink-0">#{activeInvoice.invoiceNumber ?? "?"}</span>
               <button onClick={() => { setPickerViaScan(true); setScanning(true); }} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
             </div>
-
-            {!query && recentSearches.length > 0 && (
-              <div className="mb-4">
-                <p className="text-xs text-[#94A3B8] mb-2">آخر عمليات بحث</p>
-                <div className="flex flex-wrap gap-2">
-                  {recentSearches.map((term) => (
-                    <button key={term} onClick={() => setQuery(term)} className="btn-ghost rounded-full px-3 py-1.5 text-xs font-bold flex items-center gap-1.5">
-                      <Icon name="Search" size={11} className="text-[#64748B]" />
-                      {term}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {!query && topProducts.length > 0 && (
-              <div className="mb-4">
-                <p className="text-xs text-[#94A3B8] mb-2">الأكتر مبيعًا</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {topProducts.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => { setPickerViaScan(false); setPickerProduct(p); }}
-                      className="panel rounded-xl p-2.5 text-right flex items-center gap-2.5"
-                    >
-                      <span className="w-12 h-12 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
-                        {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={20} className="text-[#475569]" />}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block font-bold text-xs text-white truncate">{p.name}</span>
-                        <span className="block font-bold text-sm text-emerald-400 tabular-nums mt-0.5">{tierBase(p[activeInvoice.tierKey])}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {results.length > 0 && (
               <div className="space-y-2 mb-4">
                 {results.map((p) => (
-                  <button key={p.id} onClick={() => { setPickerViaScan(false); setPickerProduct(p); setRecentSearches(pushRecentSearch(query.trim())); }} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
+                  <button key={p.id} onClick={() => { setPickerViaScan(false); setPickerProduct(p); }} className="panel rounded-xl p-3 w-full text-right flex items-center justify-between">
                     <span className="flex items-center gap-2.5">
                       <span className="w-9 h-9 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
                         {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={16} className="text-[#475569]" />}
@@ -2682,6 +2619,30 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
               </button>
             </div>
           </>
+        )}
+        </div>
+
+        {activeInvoice && !query && topProducts.length > 0 && (
+          <div className="hidden lg:block lg:w-56 lg:shrink-0">
+            <p className="text-xs text-[#94A3B8] mb-2">الأكتر مبيعًا</p>
+            <div className="space-y-2">
+              {topProducts.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => { setPickerViaScan(false); setPickerProduct(p); }}
+                  className="panel rounded-xl p-2.5 text-right flex items-center gap-2.5 w-full"
+                >
+                  <span className="w-10 h-10 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
+                    {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={18} className="text-[#475569]" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-bold text-xs text-white truncate">{p.name}</span>
+                    <span className="block font-bold text-sm text-emerald-400 tabular-nums mt-0.5">{tierBase(p[activeInvoice.tierKey])}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
 
         {showNewInvoicePicker && (
