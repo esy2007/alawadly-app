@@ -369,6 +369,19 @@ const withdrawalsStore = makeCollectionStore("withdrawals_col");
 
 const salesStore = makeCollectionStore("sales_col");
 
+const notificationsStore = makeCollectionStore("notifications_col");
+
+// Sends a persisted notification to a specific employee (by name) — shows up
+// as a red-dot bell alert next time they have the app open, and stays in
+// their list until they mark it read. No real push infrastructure here (no
+// backend), so this only surfaces while the app is open, same as the
+// existing unpaid-order browser reminder.
+function sendNotification(forUser, message) {
+  const notif = { id: uid(), forUser, message, read: false, createdAt: Date.now() };
+  notificationsStore.upsert(notif);
+  return notif;
+}
+
 const settingsStore = makeCollectionStore("settings_col");
 
 const DEFAULT_TIER_SETTINGS = {
@@ -500,6 +513,7 @@ const STORE_BY_COLLECTION = {
   withdrawals_col: withdrawalsStore,
   sales_col: salesStore,
   settings_col: settingsStore,
+  notifications_col: notificationsStore,
 };
 
 function todayStr() {
@@ -635,63 +649,95 @@ function loadCashierInvoices() {
 // this only covers the "read" side that the offline queue doesn't handle.
 // Short generated tone (no audio file needed) for a quick confidence cue on
 // success, or a lower warning tone on error.
+// One shared AudioContext, reused for every sound instead of creating (and
+// destroying) a new one per beep. Creating a fresh context on every single
+// tap is what caused sounds to randomly stop working — mobile browsers
+// throttle/suspend rapidly-created audio contexts, especially outside a
+// direct user gesture, so sounds would silently fail with no error.
+let sharedAudioCtx = null;
+function getAudioCtx() {
+  if (!sharedAudioCtx) {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return null;
+    sharedAudioCtx = new Ctor();
+  }
+  if (sharedAudioCtx.state === "suspended") {
+    // Must be called from inside a user-gesture handler (tap/click) to work —
+    // every call site here already is one, so this reliably wakes it back up.
+    sharedAudioCtx.resume();
+  }
+  return sharedAudioCtx;
+}
+
 function playBeep(type = "success") {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = getAudioCtx();
+    if (!ctx) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.type = "sine";
     const now = ctx.currentTime;
+    // Tiny linear attack before the exponential decay, instead of jumping
+    // straight to full volume — softens the harsh "click" at the start of
+    // every tone so it sounds rounder rather than a sharp digital beep.
+    const attack = 0.012;
     if (type === "success") {
       osc.frequency.setValueAtTime(880, now);
       osc.frequency.exponentialRampToValueAtTime(1320, now + 0.1);
-      gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.13, now + attack);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
       osc.start(now);
-      osc.stop(now + 0.16);
+      osc.stop(now + 0.19);
     } else if (type === "error") {
       osc.frequency.setValueAtTime(220, now);
-      gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.13, now + attack);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
       osc.start(now);
-      osc.stop(now + 0.26);
+      osc.stop(now + 0.29);
     } else if (type === "add") {
       osc.frequency.setValueAtTime(660, now);
       osc.frequency.exponentialRampToValueAtTime(990, now + 0.08);
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.11, now + attack);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
       osc.start(now);
-      osc.stop(now + 0.11);
+      osc.stop(now + 0.13);
     } else if (type === "remove") {
       osc.frequency.setValueAtTime(500, now);
       osc.frequency.exponentialRampToValueAtTime(320, now + 0.08);
-      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.09, now + attack);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+      osc.start(now);
+      osc.stop(now + 0.13);
+    } else if (type === "scan") {
+      osc.frequency.setValueAtTime(1200, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.12, now + attack);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
       osc.start(now);
       osc.stop(now + 0.11);
-    } else if (type === "scan") {
-      osc.frequency.setValueAtTime(1200, now);
-      gain.gain.setValueAtTime(0.14, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-      osc.start(now);
-      osc.stop(now + 0.09);
     } else if (type === "switch") {
       osc.frequency.setValueAtTime(520, now);
-      gain.gain.setValueAtTime(0.07, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.06, now + attack);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
       osc.start(now);
-      osc.stop(now + 0.06);
+      osc.stop(now + 0.07);
     } else {
       // "tap" — a very light neutral click for frequent taps (numpad, etc.)
       osc.frequency.setValueAtTime(700, now);
-      gain.gain.setValueAtTime(0.05, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.035);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.045, now + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
       osc.start(now);
-      osc.stop(now + 0.04);
+      osc.stop(now + 0.05);
     }
-    osc.onended = () => ctx.close();
+    osc.onended = () => { osc.disconnect(); gain.disconnect(); };
   } catch (e) {
     // Web Audio unsupported/blocked — silently skip, never block the action over a sound.
   }
@@ -751,6 +797,21 @@ function normalizeArabic(str) {
 }
 
 const namesMatch = (a, b) => normalizeArabic(a) === normalizeArabic(b);
+
+// Converts Arabic-Indic (٠١٢٣...) and Persian digits to plain ASCII digits,
+// so phone numbers typed in either keyboard layout validate the same way.
+function toEnglishDigits(str) {
+  const map = { "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4", "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9", "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4", "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9" };
+  return String(str || "").replace(/[٠-٩۰-۹]/g, (d) => map[d]);
+}
+
+// Egyptian mobile numbers: 11 digits, starting with 010/011/012/015.
+function validateEgyptPhone(raw) {
+  const digits = toEnglishDigits(raw).replace(/[^\d]/g, "");
+  if (digits.length !== 11) return "رقم التليفون لازم يكون ١١ رقم";
+  if (!/^(010|011|012|015)/.test(digits)) return "رقم التليفون لازم يبدأ بـ 010 أو 011 أو 012 أو 015";
+  return null;
+}
 
 function parseNum(val) {
   if (val === undefined || val === null || val === "") return null;
@@ -919,7 +980,15 @@ function printSaleReceipt(sale) {
   ${itemsHtml}
   <div class="line"></div>
   <div class="row total"><span>الإجمالي</span><span>${sale.total}</span></div>
+  ${sale.fulfillment === "delivery" ? `
+  <div class="line"></div>
+  <p class="center muted" style="font-weight:bold;">بيانات الدليفري</p>
+  <div class="row"><span>المنطقة</span><span>${escapeHtml(sale.deliveryArea || "")}</span></div>
+  <div class="row"><span>تليفون الزبون</span><span>${escapeHtml(sale.customerPhone || "")}</span></div>
+  ${sale.dispatchLocation ? `<div class="row"><span>مكان الخروج</span><span>${escapeHtml(sale.dispatchLocation)}</span></div>` : ""}
+  ` : `
   <div class="row"><span>طريقة الدفع</span><span>${escapeHtml(pay.label)}</span></div>
+  `}
   <div class="line"></div>
   <p class="center muted">${dateStr}</p>
   <p class="center muted">بواسطة: ${escapeHtml(sale.employeeName)}</p>
@@ -1268,12 +1337,52 @@ function Header({ user, onLogout, title, onBack, onNav, hideMenu }) {
   );
 }
 
+// ---------- Notification bell (order updates for now — see handoff doc) ----------
+function NotificationBell({ notifications, onMarkRead, onMarkAllRead }) {
+  const [open, setOpen] = useState(false);
+  const unreadCount = notifications.filter((n) => !n.read).length;
+  return (
+    <div className="fixed bottom-5 right-5 z-[110]">
+      <button onClick={() => setOpen((v) => !v)} className="relative bg-sky-600 text-white p-3 rounded-full shadow-lg">
+        <Icon name="Bell" size={19} />
+        {unreadCount > 0 && (
+          <span className="absolute -top-0.5 -left-0.5 w-3.5 h-3.5 rounded-full bg-rose-500 border-2 border-[#0F172A]" />
+        )}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[109]" onClick={() => setOpen(false)} />
+          <div className="absolute bottom-14 right-0 w-72 max-h-80 overflow-y-auto panel rounded-2xl p-3 shadow-xl z-[111]">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-white">الإشعارات</span>
+              {unreadCount > 0 && (
+                <button onClick={onMarkAllRead} className="text-[11px] text-sky-400 font-semibold">تحديد الكل كمقروء</button>
+              )}
+            </div>
+            {notifications.length === 0 && <p className="text-xs text-[#64748B] text-center py-4">مفيش إشعارات</p>}
+            {notifications.map((n) => (
+              <div
+                key={n.id}
+                onClick={() => onMarkRead(n.id)}
+                className={`text-xs rounded-xl p-2.5 mb-1.5 cursor-pointer leading-5 ${n.read ? "text-[#64748B]" : "text-white bg-sky-500/10 font-semibold"}`}
+              >
+                {n.message}
+                <div className="text-[10px] text-[#64748B] mt-1 font-normal">{new Date(n.createdAt).toLocaleString("ar-EG")}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---------- Main menu ----------
 function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
   const items = [
     { key: "cashier", label: "الكاشير", desc: "بيع منتجات وطباعة فاتورة", icon: "Wallet", enabled: true, accent: "#10B981" },
     { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: userIsAdmin(user), accent: "#14B8A6" },
-    { key: "orders", label: "الطلبات", desc: "تسجيل أوردرات جديدة", icon: "Package", enabled: true, accent: "#F97316" },
+    { key: "orders", label: "الطلبات", desc: "متابعة حالة أوردرات الدليفري", icon: "Package", enabled: true, accent: "#F97316" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
     { key: "attendance", label: "الحضور والسحب", desc: "سجل حضورك وسحوباتك", icon: "Clock", enabled: true, accent: "#06B6D4" },
     { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: userIsAdmin(user), accent: "#0EA5E9" },
@@ -1283,7 +1392,7 @@ function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
 
   const FAB_OPTIONS = [
     { key: "prices", label: "منتج", icon: "Package", color: "#14B8A6", enabled: userIsAdmin(user) },
-    { key: "orders", label: "أوردر", icon: "Truck", color: "#F97316", enabled: true },
+    { key: "orders", label: "الطلبات", icon: "Truck", color: "#F97316", enabled: true },
     { key: "cashier", label: "عميل", icon: "User", color: "#10B981", enabled: true },
     { key: "transfers", label: "تحويل", icon: "Send", color: "#A855F7", enabled: true },
   ].filter((o) => o.enabled);
@@ -2049,6 +2158,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
 
 function SaleReceiptPreview({ sale, onClose }) {
   const pay = paymentLabel(sale);
+  const isDelivery = sale.fulfillment === "delivery";
   return (
     <Modal title="معاينة الفاتورة" accent="#0EA5E9" onClose={onClose}>
       <div className="bg-white text-black rounded-lg p-4 mb-4 text-sm" dir="rtl" style={{ fontFamily: "Tahoma, Arial, sans-serif" }}>
@@ -2064,7 +2174,20 @@ function SaleReceiptPreview({ sale, onClose }) {
         ))}
         <div className="border-t border-dashed border-gray-300 my-2" />
         <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{sale.total}</span></div>
-        <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
+        {!isDelivery && (
+          <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
+        )}
+        {isDelivery && (
+          <>
+            <div className="border-t border-dashed border-gray-300 my-2" />
+            <p className="text-xs font-bold text-gray-700 mb-1">بيانات الدليفري</p>
+            <div className="flex justify-between text-xs text-gray-600"><span>المنطقة</span><span>{sale.deliveryArea}</span></div>
+            <div className="flex justify-between text-xs text-gray-600"><span>تليفون الزبون</span><span dir="ltr">{sale.customerPhone}</span></div>
+            {sale.dispatchLocation && (
+              <div className="flex justify-between text-xs text-gray-600"><span>مكان الخروج</span><span>{sale.dispatchLocation}</span></div>
+            )}
+          </>
+        )}
       </div>
       <div className="flex gap-2">
         <button onClick={() => printSaleReceipt(sale)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
@@ -2119,6 +2242,9 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const [pickerProduct, setPickerProduct] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [fulfillment, setFulfillment] = useState("pickup"); // pickup | delivery
+  const [deliveryForm, setDeliveryForm] = useState({ area: "", phone: "", dispatchLocation: "" });
+  const [deliveryError, setDeliveryError] = useState("");
   const [confirmForm, setConfirmForm] = useState(EMPTY_CONFIRM_FORM);
   const [confirmError, setConfirmError] = useState("");
   const [lastSale, setLastSale] = useState(null);
@@ -2328,6 +2454,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       items: activeInvoice.items.map((it) => ({ productName: it.productName, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
       total,
       paid: true,
+      fulfillment: "pickup",
       paymentMethod: confirmForm.paymentMethod,
       splitTransferMethod: isSplit ? confirmForm.splitTransferMethod : null,
       cashAmount: isSplit ? parseNum(confirmForm.cashAmount) : null,
@@ -2345,6 +2472,56 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     setShowCheckout(false);
     setConfirmForm(EMPTY_CONFIRM_FORM);
     setConfirmError("");
+    setFulfillment("pickup");
+    setDeliveryForm({ area: "", phone: "", dispatchLocation: "" });
+    setDeliveryError("");
+    setQuery("");
+  };
+
+  const completeDeliveryOrder = () => {
+    if (!deliveryForm.area.trim()) {
+      setDeliveryError("اكتب المنطقة أو اسم المحل");
+      return;
+    }
+    const phoneErr = validateEgyptPhone(deliveryForm.phone);
+    if (phoneErr) {
+      setDeliveryError(phoneErr);
+      return;
+    }
+    const sale = {
+      id: uid(),
+      employeeName: user.name,
+      customerName: activeInvoice.customerName || null,
+      branchName: getTodayBranchName(attendance, user.name, branchSettings.branches),
+      invoiceNumber: activeInvoice.invoiceNumber,
+      tierKey: activeInvoice.tierKey,
+      items: activeInvoice.items.map((it) => ({ productName: it.productName, unitPrice: it.unitPrice, qty: it.qty, lineTotal: it.lineTotal })),
+      total,
+      paid: false,
+      fulfillment: "delivery",
+      deliveryStatus: "prepared",
+      deliveryArea: deliveryForm.area.trim(),
+      customerPhone: toEnglishDigits(deliveryForm.phone).replace(/[^\d]/g, ""),
+      dispatchLocation: deliveryForm.dispatchLocation || null,
+      repName: null,
+      paymentMethod: null,
+      preparedAt: Date.now(),
+      createdAt: Date.now(),
+    };
+    setSales((s) => [...s, sale]);
+    playBeep("success");
+    salesStore.upsert(sale);
+    setLastSale(sale);
+    const closedId = activeId;
+    const remaining = invoices.filter((inv) => inv.id !== closedId);
+    setInvoices(remaining);
+    setActiveId(remaining.length ? remaining[0].id : null);
+    setShowCheckout(false);
+    setConfirmForm(EMPTY_CONFIRM_FORM);
+    setConfirmError("");
+    setFulfillment("pickup");
+    setDeliveryForm({ area: "", phone: "", dispatchLocation: "" });
+    setDeliveryError("");
     setQuery("");
   };
 
@@ -2610,15 +2787,45 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
         {showCheckout && (
           <Modal title="إتمام البيع" accent="#10B981" onClose={() => setShowCheckout(false)}>
             <p className="text-center text-2xl font-bold text-white mb-4 tabular-nums">{total}</p>
-            <PaymentMethodPicker value={confirmForm} onChange={setConfirmForm} />
-            {confirmError && <p className="text-rose-400 text-xs mb-3">{confirmError}</p>}
-            <button onClick={completeSale} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تأكيد البيع</button>
+
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setFulfillment("pickup")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${fulfillment === "pickup" ? "btn-emerald" : "btn-ghost"}`}>استلام</button>
+              <button onClick={() => setFulfillment("delivery")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${fulfillment === "delivery" ? "btn-sky" : "btn-ghost"}`}>دليفري</button>
+            </div>
+
+            {fulfillment === "pickup" ? (
+              <>
+                <PaymentMethodPicker value={confirmForm} onChange={setConfirmForm} />
+                {confirmError && <p className="text-rose-400 text-xs mb-3">{confirmError}</p>}
+                <button onClick={completeSale} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تأكيد البيع</button>
+              </>
+            ) : (
+              <>
+                <TextField label="المنطقة أو اسم المحل" icon="MapPin" value={deliveryForm.area} onChange={(e) => setDeliveryForm({ ...deliveryForm, area: e.target.value })} placeholder="مثال: المهندسين" />
+                <TextField label="رقم تليفون الزبون" icon="Smartphone" value={deliveryForm.phone} onChange={(e) => setDeliveryForm({ ...deliveryForm, phone: e.target.value })} placeholder="01xxxxxxxxx" />
+                <div className="mb-4">
+                  <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">مكان الخروج (اختياري دلوقتي)</span>
+                  <div className="flex gap-2">
+                    {branchSettings.branches.map((b) => (
+                      <button key={b.id} onClick={() => setDeliveryForm({ ...deliveryForm, dispatchLocation: deliveryForm.dispatchLocation === b.name ? "" : b.name })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${deliveryForm.dispatchLocation === b.name ? "active-sky" : ""}`}>
+                        {b.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {deliveryError && <p className="text-rose-400 text-xs mb-3">{deliveryError}</p>}
+                <button onClick={completeDeliveryOrder} className="btn-sky w-full rounded-xl py-2.5 font-bold">تأكيد الأوردر</button>
+              </>
+            )}
           </Modal>
         )}
 
         {lastSale && (
-          <Modal title="تم البيع بنجاح" accent="#34D399" onClose={() => setLastSale(null)}>
+          <Modal title={lastSale.fulfillment === "delivery" ? "تم تسجيل الأوردر" : "تم البيع بنجاح"} accent="#34D399" onClose={() => setLastSale(null)}>
             <p className="text-sm text-[#CBD5E1] mb-4">الإجمالي: <span className="font-bold text-emerald-400 tabular-nums">{lastSale.total}</span></p>
+            {lastSale.fulfillment === "delivery" && (
+              <p className="text-xs text-[#94A3B8] mb-4">الأوردر بحالة "تم التجهيز" — تلاقيه في قسم الطلبات لتسجيل الإرسال.</p>
+            )}
             <button onClick={() => setShowReceiptPreview(true)} className="btn-sky w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-2">
               <Icon name="Printer" size={16} /> معاينة وطباعة الفاتورة
             </button>
@@ -3291,276 +3498,275 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   );
 }
 
-// ---------- Orders screen ----------
-const EMPTY_ORDER_FORM = {
-  repName: "",
-  area: "",
-  dispatchLocation: "",
-  price: "",
-  notes: "",
-  invoiceImage: null,
-  paid: null,
-  paymentMethod: null,
-  splitTransferMethod: null,
-  cashAmount: "",
-  transferAmount: "",
-};
+// ---------- Orders screen (delivery-tracking view over sales_col) ----------
+// Delivery orders are now created from the cashier at checkout time ("دليفري"
+// choice) — this screen is purely for tracking them through their two
+// remaining stages: تم التجهيز -> تسجيل الإرسال -> (لو مش مدفوع مقدمًا)
+// تأكيد الاستلام. See the handoff doc for the full agreed design.
 
-function validateOrder(form) {
-  if (!form.repName.trim()) return "اكتب اسم المندوب";
-  if (!form.area.trim()) return "اكتب المنطقة أو اسم المحل";
-  const price = parseNum(form.price);
-  if (price === null || price <= 0) return "اكتب سعر صحيح للأوردر";
-  if (form.paid === null) return "حدد الأوردر مدفوع ولا لأ";
-  if (form.paid) return validatePaymentMethod(form, price);
-  return null;
-}
+function OrdersScreen({ user, sales, setSales, users, branchSettings, setView }) {
+  const [tab, setTab] = useState("pending"); // pending (needs receipt) | mine
+  const [sendingOrder, setSendingOrder] = useState(null);
+  const [receivingOrder, setReceivingOrder] = useState(null);
+  const [detailOrder, setDetailOrder] = useState(null);
 
-
-function OrdersScreen({ user, orders, setOrders, branchSettings, attendance, setView }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState(EMPTY_ORDER_FORM);
-  const [error, setError] = useState("");
-  const invoiceFileRef = React.useRef(null);
-
-  const [confirmingOrder, setConfirmingOrder] = useState(null);
-  const [confirmForm, setConfirmForm] = useState(EMPTY_CONFIRM_FORM);
-  const [confirmError, setConfirmError] = useState("");
-
-  const repNameOptions = [...new Set(orders.map((o) => o.repName).filter(Boolean))];
-  const areaOptions = [...new Set(orders.map((o) => o.area).filter(Boolean))];
-
-  const handleRefresh = async () => {
-    const fresh = await ordersStore.loadAll();
-    if (fresh) setOrders(fresh);
-    return !!fresh;
-  };
-
-  // Paid orders drop off this screen 24 hours after payment was confirmed — they're
-  // still permanently available to the admin in Reports regardless of age.
+  const deliveries = sales.filter((s) => s.fulfillment === "delivery");
+  const now = Date.now();
   const DAY_MS = 24 * 60 * 60 * 1000;
-  const visibleOrders = orders.filter((o) => !(o.paid && o.confirmedAt && Date.now() - o.confirmedAt > DAY_MS));
 
-  const pickInvoiceImage = async (file) => {
-    try {
-      const dataUrl = await resizeImageFile(file, 1400, 0.88);
-      setForm((v) => ({ ...v, invoiceImage: dataUrl }));
-    } catch {
-      // optional — ignore failures
-    }
+  const pendingReceipt = deliveries
+    .filter((s) => s.deliveryStatus === "sent")
+    .sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0));
+
+  const mine = deliveries
+    .filter((s) => userIsAdmin(user) || s.employeeName === user.name)
+    .filter((s) => s.deliveryStatus !== "done" || (s.receivedAt && now - s.receivedAt < DAY_MS))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const statusLabel = (s) => {
+    if (s.deliveryStatus === "prepared") return { label: "تم التجهيز", color: "#FBBF24" };
+    if (s.deliveryStatus === "sent") return { label: "تم الإرسال", color: "#38BDF8" };
+    return { label: "تم الاستلام", color: "#34D399" };
   };
 
-  const addOrder = () => {
-    const err = validateOrder(form);
-    if (err) {
-      setError(err);
-      return;
-    }
-    const price = parseNum(form.price);
-    const isSplit = form.paid && form.paymentMethod === "split";
-    const newOrder = {
-      id: uid(),
-      employeeName: user.name,
+  const registerSend = (form) => {
+    const err = form.paidUpfront ? validatePaymentMethod(form, sendingOrder.total) : null;
+    if (!form.repName.trim()) return "اكتب اسم المندوب";
+    if (!sendingOrder.dispatchLocation && !form.dispatchLocation) return "اختار مكان خروج الأوردر";
+    if (err) return err;
+    return null;
+  };
+
+  const submitSend = (form) => {
+    const err = registerSend(form);
+    if (err) return err;
+    const now2 = Date.now();
+    const isSplit = form.paymentMethod === "split";
+    const updated = {
+      ...sendingOrder,
       repName: form.repName.trim(),
-      area: form.area.trim(),
-      dispatchLocation: form.dispatchLocation || null,
-      price,
-      notes: form.notes.trim(),
-      invoiceImage: form.invoiceImage || null,
-      paid: form.paid,
-      paymentMethod: form.paid ? form.paymentMethod : null,
+      dispatchLocation: sendingOrder.dispatchLocation || form.dispatchLocation,
+      sentBy: user.name,
+      sentAt: now2,
+      deliveryStatus: form.paidUpfront ? "done" : "sent",
+      paid: !!form.paidUpfront,
+      paymentMethod: form.paidUpfront ? form.paymentMethod : null,
+      splitTransferMethod: form.paidUpfront && isSplit ? form.splitTransferMethod : null,
+      cashAmount: form.paidUpfront && isSplit ? parseNum(form.cashAmount) : null,
+      transferAmount: form.paidUpfront && isSplit ? parseNum(form.transferAmount) : null,
+      receivedBy: form.paidUpfront ? user.name : null,
+      receivedAt: form.paidUpfront ? now2 : null,
+    };
+    setSales(sales.map((s) => (s.id === updated.id ? updated : s)));
+    salesStore.upsert(updated);
+    setSendingOrder(null);
+    return null;
+  };
+
+  const submitReceive = (form) => {
+    const err = validatePaymentMethod(form, receivingOrder.total);
+    if (err) return err;
+    const now2 = Date.now();
+    const isSplit = form.paymentMethod === "split";
+    const updated = {
+      ...receivingOrder,
+      deliveryStatus: "done",
+      paid: true,
+      paymentMethod: form.paymentMethod,
       splitTransferMethod: isSplit ? form.splitTransferMethod : null,
       cashAmount: isSplit ? parseNum(form.cashAmount) : null,
       transferAmount: isSplit ? parseNum(form.transferAmount) : null,
-      confirmedBy: null,
-      confirmedAt: null,
-      createdAt: Date.now(),
+      receivedBy: user.name,
+      receivedAt: now2,
     };
-    setOrders([newOrder, ...orders]);
-    ordersStore.upsert(newOrder);
-    setForm(EMPTY_ORDER_FORM);
-    setError("");
-    setShowAdd(false);
-  };
-
-  const openConfirm = (order) => {
-    setConfirmingOrder(order);
-    setConfirmForm(EMPTY_CONFIRM_FORM);
-    setConfirmError("");
-  };
-
-  const finalizeConfirm = () => {
-    const err = validatePaymentMethod(confirmForm, confirmingOrder.price);
-    if (err) {
-      setConfirmError(err);
-      return;
+    setSales(sales.map((s) => (s.id === updated.id ? updated : s)));
+    salesStore.upsert(updated);
+    if (updated.employeeName) {
+      sendNotification(updated.employeeName, `أوردر (فاتورة #${updated.invoiceNumber ?? "?"}) / (${updated.deliveryArea}) تم استلامه`);
     }
-    const isSplit = confirmForm.paymentMethod === "split";
-    const updated = {
-      ...confirmingOrder,
-      paid: true,
-      paymentMethod: confirmForm.paymentMethod,
-      splitTransferMethod: isSplit ? confirmForm.splitTransferMethod : null,
-      cashAmount: isSplit ? parseNum(confirmForm.cashAmount) : null,
-      transferAmount: isSplit ? parseNum(confirmForm.transferAmount) : null,
-      confirmedBy: user.name,
-      confirmedAt: Date.now(),
-    };
-    setOrders(orders.map((o) => (o.id === confirmingOrder.id ? updated : o)));
-    ordersStore.upsert(updated);
-    setConfirmingOrder(null);
+    setReceivingOrder(null);
+    return null;
+  };
+
+  const renderCard = (s) => {
+    const st = statusLabel(s);
+    const canSend = s.deliveryStatus === "prepared" && s.employeeName === user.name;
+    const canReceive = s.deliveryStatus === "sent";
+    return (
+      <div key={s.id} className="panel p-4 rounded-2xl">
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#94A3B8]" /> {s.deliveryArea}</h3>
+            <p className="text-xs text-[#94A3B8] mt-0.5">فاتورة #{s.invoiceNumber ?? "?"} · {s.items.length} صنف</p>
+          </div>
+          <span className="font-bold text-lg text-sky-400 tabular-nums">{s.total}</span>
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t border-white/5">
+          <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${st.color}22`, color: st.color }}>{st.label}</span>
+          <span className="text-xs font-bold text-amber-300">{s.employeeName} <span className="text-[#64748B] font-normal">· {new Date(s.createdAt).toLocaleDateString("ar-EG")}</span></span>
+        </div>
+        {s.repName && <p className="text-xs text-[#CBD5E1] mt-2">المندوب: {s.repName}</p>}
+
+        <div className="flex items-center justify-between mt-2">
+          <button onClick={() => setDetailOrder(s)} className="text-xs text-sky-400 font-semibold hover:underline">عرض التفاصيل</button>
+          {canSend && (
+            <button onClick={() => setSendingOrder(s)} className="btn-sky text-xs px-3 py-1.5 rounded-lg font-bold">تسجيل الإرسال</button>
+          )}
+          {canReceive && (
+            <button onClick={() => setReceivingOrder(s)} className="btn-emerald text-xs px-3 py-1.5 rounded-lg font-bold">تأكيد الاستلام</button>
+          )}
+        </div>
+      </div>
+    );
   };
 
   return (
     <div className="shop-root">
-      <PullToRefresh onRefresh={handleRefresh} />
+      <PullToRefresh onRefresh={async () => { const fresh = await salesStore.loadAll(); if (fresh) setSales(fresh); }} />
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الطلبات" onNav={setView} />
 
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
-        <button
-          onClick={() => {
-            const todayBranch = getTodayBranchName(attendance, user.name, branchSettings.branches);
-            setForm({ ...EMPTY_ORDER_FORM, dispatchLocation: todayBranch || "" });
-            setShowAdd(true);
-            setError("");
-          }}
-          className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2 mb-4"
-        >
-          <Icon name="Plus" size={18} /> إضافة أوردر جديد
-        </button>
-
-        <div className="space-y-3 pb-6">
-          {visibleOrders.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لا يوجد أوردرات مسجلة بعد</p>}
-          {visibleOrders.map((o) => {
-            const pay = paymentLabel(o);
-            return (
-              <div key={o.id} className="panel p-4 rounded-2xl">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#94A3B8]" /> {o.repName}</h3>
-                    <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5">
-                      <Icon name="MapPin" size={12} /> {o.area}{o.dispatchLocation ? ` · من: ${o.dispatchLocation}` : ""}
-                    </p>
-                  </div>
-                  <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
-                </div>
-
-                {o.notes && <p className="text-xs text-[#CBD5E1] bg-black/15 rounded-lg px-2.5 py-1.5 mb-2">📝 {o.notes}</p>}
-
-                {o.invoiceImage && (
-                  <InvoiceThumb src={o.invoiceImage} className="w-14 h-14 rounded-lg object-cover border border-white/10 mb-2" />
-                )}
-
-                <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
-                  <span className="text-xs font-bold text-amber-300">
-                    {o.employeeName} <span className="text-[#64748B] font-normal">· {new Date(o.createdAt).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}</span>
-                  </span>
-                </div>
-
-                {o.paid && o.confirmedBy && (
-                  <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
-                )}
-
-                <div className="flex justify-end gap-2 mt-2">
-                  <button onClick={() => printOrderReceipt(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
-                  {!o.paid && (
-                    <button onClick={() => openConfirm(o)} className="text-xs btn-emerald px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="CheckCircle2" size={13} /> تم الدفع</button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setTab("pending")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${tab === "pending" ? "btn-sky" : "btn-ghost"}`}>
+            محتاجة إجراء{pendingReceipt.length > 0 ? ` (${pendingReceipt.length})` : ""}
+          </button>
+          <button onClick={() => setTab("mine")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${tab === "mine" ? "btn-sky" : "btn-ghost"}`}>أوردراتي</button>
         </div>
 
-        {showAdd && (
-          <Modal title="➕ أوردر جديد" accent="#FBBF24" onClose={() => setShowAdd(false)}>
-            <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">اسم الموظف</span>
-              <div className="field-input w-full rounded-xl px-4 py-2.5 text-sm opacity-70">{user.name}</div>
-            </label>
-
-            <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">اسم المندوب</span>
-              <AutocompleteInput value={form.repName} onChange={(v) => setForm({ ...form, repName: v })} options={repNameOptions} placeholder="اسم المندوب" />
-            </label>
-
-            <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">المنطقة أو اسم المحل</span>
-              <AutocompleteInput value={form.area} onChange={(v) => setForm({ ...form, area: v })} options={areaOptions} placeholder="المنطقة أو اسم المحل" />
-            </label>
-
-            <div className="mb-3">
-              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">مكان خروج الأوردر (اختياري)</span>
-              <div className="flex gap-2">
-                {branchSettings.branches.map((b) => (
-                  <button key={b.id} onClick={() => setForm({ ...form, dispatchLocation: form.dispatchLocation === b.name ? "" : b.name })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.dispatchLocation === b.name ? "active-sky" : ""}`}>
-                    {b.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">السعر</span>
-              <input value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm text-center" placeholder="السعر الكلي" />
-            </label>
-
-            <label className="block mb-3 text-right">
-              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">ملاحظات (اختياري)</span>
-              <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="field-input w-full rounded-xl px-4 py-2.5 text-sm resize-none" rows={2} placeholder="أي ملاحظات على الأوردر" />
-            </label>
-
-            <div className="mb-3">
-              <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">صورة الفاتورة (اختياري)</span>
-              {form.invoiceImage ? (
-                <div className="relative inline-block">
-                  <img src={form.invoiceImage} className="w-20 h-20 rounded-xl object-cover border border-white/10" alt="فاتورة" />
-                  <button onClick={() => setForm({ ...form, invoiceImage: null })} className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-rose-600 flex items-center justify-center">
-                    <Icon name="X" size={11} className="text-white" />
-                  </button>
-                </div>
-              ) : (
-                <button type="button" onClick={() => invoiceFileRef.current && invoiceFileRef.current.click()} className="btn-ghost rounded-xl px-4 py-2 text-xs flex items-center gap-1.5">
-                  <Icon name="Camera" size={14} /> إضافة صورة
-                </button>
-              )}
-              <input ref={invoiceFileRef} type="file" accept="image/*" className="hidden" onChange={(e) => { if (e.target.files && e.target.files[0]) pickInvoiceImage(e.target.files[0]); e.target.value = ""; }} />
-            </div>
-
-            <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">دفع ولا لأ؟</span>
-            <div className="flex gap-2 mb-3">
-              <button onClick={() => setForm({ ...form, paid: true })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.paid === true ? "active-emerald" : ""}`}>مدفوع</button>
-              <button onClick={() => setForm({ ...form, paid: false, paymentMethod: null })} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${form.paid === false ? "active-rose" : ""}`}>غير مدفوع</button>
-            </div>
-
-            {form.paid === true && <PaymentMethodPicker value={form} onChange={setForm} />}
-
-            {error && <p className="text-xs text-rose-400 mb-3 flex items-center gap-1"><Icon name="AlertCircle" size={12} /> {error}</p>}
-
-            <div className="flex gap-2">
-              <button onClick={addOrder} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">حفظ الأوردر</button>
-              <button onClick={() => setShowAdd(false)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
-            </div>
-          </Modal>
-        )}
-
-        {confirmingOrder && (
-          <Modal title="✅ تأكيد استلام الدفع" accent="#34D399" onClose={() => setConfirmingOrder(null)}>
-            <div className="panel rounded-xl p-3 mb-4 text-sm">
-              <p className="text-white font-bold">{confirmingOrder.repName} · {confirmingOrder.area}</p>
-              <p className="text-sky-400 font-bold tabular-nums mt-1">{confirmingOrder.price} جنيه</p>
-            </div>
-            <PaymentMethodPicker value={confirmForm} onChange={setConfirmForm} />
-            {confirmError && <p className="text-xs text-rose-400 mb-3 flex items-center gap-1"><Icon name="AlertCircle" size={12} /> {confirmError}</p>}
-            <div className="flex gap-2">
-              <button onClick={finalizeConfirm} className="btn-emerald flex-1 rounded-xl py-2 text-sm font-bold">تأكيد الدفع</button>
-              <button onClick={() => setConfirmingOrder(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">إلغاء</button>
-            </div>
-          </Modal>
-        )}
+        <div className="space-y-3 pb-6">
+          {tab === "pending" && (
+            <>
+              {pendingReceipt.length === 0 && <p className="text-center text-[#64748B] py-10 text-sm">مفيش أوردرات محتاجة استلام دلوقتي</p>}
+              {pendingReceipt.map(renderCard)}
+            </>
+          )}
+          {tab === "mine" && (
+            <>
+              {mine.length === 0 && <p className="text-center text-[#64748B] py-10 text-sm">مفيش أوردرات لسه</p>}
+              {mine.map(renderCard)}
+            </>
+          )}
+        </div>
       </div>
+
+      {sendingOrder && (
+        <SendOrderModal
+          order={sendingOrder}
+          branchSettings={branchSettings}
+          onSubmit={submitSend}
+          onClose={() => setSendingOrder(null)}
+        />
+      )}
+      {receivingOrder && (
+        <ReceiveOrderModal
+          order={receivingOrder}
+          onSubmit={submitReceive}
+          onClose={() => setReceivingOrder(null)}
+        />
+      )}
+      {detailOrder && (
+        <OrderDetailModal order={detailOrder} onClose={() => setDetailOrder(null)} />
+      )}
     </div>
+  );
+}
+
+function SendOrderModal({ order, branchSettings, onSubmit, onClose }) {
+  const [repName, setRepName] = useState("");
+  const [dispatchLocation, setDispatchLocation] = useState("");
+  const [paidUpfront, setPaidUpfront] = useState(null);
+  const [pm, setPm] = useState(EMPTY_CONFIRM_FORM);
+  const [error, setError] = useState("");
+
+  const submit = () => {
+    if (!repName.trim()) { setError("اكتب اسم المندوب"); return; }
+    if (!order.dispatchLocation && !dispatchLocation) { setError("اختار مكان خروج الأوردر"); return; }
+    if (paidUpfront === null) { setError("حدد الأوردر مدفوع مقدمًا ولا لأ"); return; }
+    const form = { repName, dispatchLocation, paidUpfront, ...pm };
+    const err = onSubmit(form);
+    if (err) setError(err);
+  };
+
+  return (
+    <Modal title="تسجيل الإرسال" accent="#38BDF8" onClose={onClose}>
+      <TextField label="اسم المندوب" icon="User" value={repName} onChange={(e) => setRepName(e.target.value)} placeholder="اكتب اسم المندوب" />
+
+      {!order.dispatchLocation && (
+        <div className="mb-4">
+          <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">مكان الخروج</span>
+          <div className="flex gap-2">
+            {branchSettings.branches.map((b) => (
+              <button key={b.id} onClick={() => setDispatchLocation(b.name)} className={`toggle-pill flex-1 rounded-xl py-2 text-sm font-bold ${dispatchLocation === b.name ? "active-sky" : ""}`}>
+                {b.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mb-4">
+        <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">مدفوع مقدمًا؟</span>
+        <div className="flex gap-2">
+          <button onClick={() => setPaidUpfront(true)} className={`flex-1 rounded-xl py-2 text-sm font-bold ${paidUpfront === true ? "btn-emerald" : "btn-ghost"}`}>أيوه، اتدفع</button>
+          <button onClick={() => setPaidUpfront(false)} className={`flex-1 rounded-xl py-2 text-sm font-bold ${paidUpfront === false ? "btn-sky" : "btn-ghost"}`}>لأ، هيتدفع عند التسليم</button>
+        </div>
+      </div>
+
+      {paidUpfront === true && <PaymentMethodPicker value={pm} onChange={setPm} />}
+
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+      <button onClick={submit} className="btn-sky w-full rounded-xl py-2.5 font-bold">تم</button>
+    </Modal>
+  );
+}
+
+function ReceiveOrderModal({ order, onSubmit, onClose }) {
+  const [pm, setPm] = useState(EMPTY_CONFIRM_FORM);
+  const [error, setError] = useState("");
+
+  const submit = () => {
+    const err = onSubmit(pm);
+    if (err) setError(err);
+  };
+
+  return (
+    <Modal title="تأكيد الاستلام" accent="#10B981" onClose={onClose}>
+      <p className="text-sm text-[#CBD5E1] mb-4">الإجمالي: <span className="font-bold text-emerald-400 tabular-nums">{order.total}</span></p>
+      <PaymentMethodPicker value={pm} onChange={setPm} />
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+      <button onClick={submit} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تأكيد الاستلام</button>
+    </Modal>
+  );
+}
+
+function OrderDetailModal({ order, onClose }) {
+  const pay = paymentLabel(order);
+  return (
+    <Modal title={`فاتورة #${order.invoiceNumber ?? "?"}`} accent="#0EA5E9" onClose={onClose}>
+      <div className="space-y-1.5 text-xs text-[#CBD5E1] mb-4">
+        <p><span className="text-[#94A3B8]">المنطقة: </span>{order.deliveryArea}</p>
+        <p><span className="text-[#94A3B8]">تليفون الزبون: </span><span dir="ltr">{order.customerPhone}</span></p>
+        {order.dispatchLocation && <p><span className="text-[#94A3B8]">مكان الخروج: </span>{order.dispatchLocation}</p>}
+        {order.repName && <p><span className="text-[#94A3B8]">المندوب: </span>{order.repName}</p>}
+        <p><span className="text-[#94A3B8]">أنشأها: </span>{order.employeeName} · {new Date(order.createdAt).toLocaleString("ar-EG")}</p>
+        {order.sentBy && <p><span className="text-[#94A3B8]">سجّل الإرسال: </span>{order.sentBy} · {new Date(order.sentAt).toLocaleString("ar-EG")}</p>}
+        {order.receivedBy && <p><span className="text-[#94A3B8]">أكّد الاستلام: </span>{order.receivedBy} · {new Date(order.receivedAt).toLocaleString("ar-EG")}</p>}
+        {order.deliveryStatus === "done" && <p><span className="text-[#94A3B8]">طريقة الدفع: </span>{pay.label}</p>}
+        <div className="border-t border-white/5 pt-1.5 mt-1.5">
+          {order.items.map((it, i) => (
+            <div key={i} className="flex items-center justify-between">
+              <span>{it.productName} × {it.qty}</span>
+              <span className="tabular-nums">{it.lineTotal}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-between pt-1.5 border-t border-white/5 font-bold text-white">
+          <span>الإجمالي</span>
+          <span className="tabular-nums">{order.total}</span>
+        </div>
+      </div>
+      <button onClick={onClose} className="btn-ghost w-full rounded-xl py-2.5 font-bold">إغلاق</button>
+    </Modal>
   );
 }
 
@@ -3743,163 +3949,234 @@ function OrderReceiptPreview({ order, onClose }) {
   );
 }
 
-function ReportsScreen({ user, orders, sales, setView }) {
-  const [tab, setTab] = useState("orders");
-  const paidOrders = orders.filter((o) => o.paid).sort((a, b) => b.createdAt - a.createdAt);
-  const ordersTotal = paidOrders.reduce((s, o) => s + o.price, 0);
-  const sortedSales = [...sales].sort((a, b) => b.createdAt - a.createdAt);
-  const salesTotal = sortedSales.reduce((s, sale) => s + sale.total, 0);
+function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
+  const [filterType, setFilterType] = useState("all"); // all | orders | sales
+  const [filterBranch, setFilterBranch] = useState("all");
+  const [filterOpen, setFilterOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [previewOrder, setPreviewOrder] = useState(null);
   const [previewSale, setPreviewSale] = useState(null);
+
+  const paidOrders = orders.filter((o) => o.paid).sort((a, b) => b.createdAt - a.createdAt);
+  const sortedSales = [...sales].sort((a, b) => b.createdAt - a.createdAt);
+
+  const branchFilteredOrders = filterBranch === "all" ? paidOrders : paidOrders.filter((o) => o.dispatchLocation === filterBranch);
+  const branchFilteredSales = filterBranch === "all" ? sortedSales : sortedSales.filter((s) => s.branchName === filterBranch || s.dispatchLocation === filterBranch);
+
+  const showOrders = filterType === "all" || filterType === "orders";
+  const showSales = filterType === "all" || filterType === "sales";
+
+  const visibleOrders = showOrders ? branchFilteredOrders : [];
+  const visibleSales = showSales ? branchFilteredSales : [];
+
+  const ordersTotal = visibleOrders.reduce((s, o) => s + o.price, 0);
+  const salesTotal = visibleSales.reduce((s, sale) => s + sale.total, 0);
+  const combinedTotal = ordersTotal + salesTotal;
+  const combinedCount = visibleOrders.length + visibleSales.length;
+
+  // Merged, date-sorted feed when showing both types together.
+  const mergedItems = [
+    ...visibleOrders.map((o) => ({ kind: "order", data: o, createdAt: o.createdAt })),
+    ...visibleSales.map((s) => ({ kind: "sale", data: s, createdAt: s.createdAt })),
+  ].sort((a, b) => b.createdAt - a.createdAt);
+
+  const activeFilterCount = (filterType !== "all" ? 1 : 0) + (filterBranch !== "all" ? 1 : 0);
+
+  const renderOrderCard = (o) => {
+    const pay = paymentLabel(o);
+    const expanded = expandedId === o.id;
+    return (
+      <div key={o.id} className="panel p-4 rounded-2xl">
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#94A3B8]" /> {o.repName}</h3>
+            <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.area}</p>
+          </div>
+          <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t border-white/5">
+          <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
+          <span className="text-xs font-bold text-amber-300">{o.employeeName} <span className="text-[#64748B] font-normal">· {new Date(o.createdAt).toLocaleDateString("ar-EG")}</span></span>
+        </div>
+        {o.confirmedBy && (
+          <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
+        )}
+
+        {expanded && (
+          <div className="mt-3 pt-3 border-t border-white/5 space-y-2 text-xs">
+            {o.dispatchLocation && (
+              <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">مكان الخروج: </span>{o.dispatchLocation}</p>
+            )}
+            {o.notes && (
+              <p className="text-[#CBD5E1] bg-black/15 rounded-lg px-2.5 py-1.5">📝 {o.notes}</p>
+            )}
+            {o.paymentMethod === "split" && (
+              <p className="text-[#CBD5E1]">
+                <span className="text-[#94A3B8]">تفاصيل الدفع: </span>
+                كاش {o.cashAmount} + تحويل {o.splitTransferMethod === "instapay" ? "انستاباي" : "فودافون كاش"} {o.transferAmount}
+              </p>
+            )}
+            <p className="text-[#CBD5E1]">
+              <span className="text-[#94A3B8]">وقت الإنشاء: </span>
+              {new Date(o.createdAt).toLocaleString("ar-EG")}
+            </p>
+            {o.confirmedAt && (
+              <p className="text-[#CBD5E1]">
+                <span className="text-[#94A3B8]">وقت تأكيد الدفع: </span>
+                {new Date(o.confirmedAt).toLocaleString("ar-EG")}
+              </p>
+            )}
+            {o.invoiceImage && (
+              <InvoiceThumb src={o.invoiceImage} className="w-20 h-20 rounded-lg object-cover border border-white/10" />
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between mt-2">
+          <button onClick={() => setExpandedId(expanded ? null : o.id)} className="text-xs text-sky-400 font-semibold hover:underline">
+            {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
+          </button>
+          <button onClick={() => setPreviewOrder(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSaleCard = (s) => {
+    const pay = paymentLabel(s);
+    const expanded = expandedId === s.id;
+    const isDelivery = s.fulfillment === "delivery";
+    const deliveryStatusLabel = isDelivery
+      ? (s.deliveryStatus === "prepared" ? { label: "تم التجهيز", color: "#FBBF24" }
+        : s.deliveryStatus === "sent" ? { label: "تم الإرسال", color: "#38BDF8" }
+        : { label: "تم الاستلام", color: "#34D399" })
+      : null;
+    return (
+      <div key={s.id} className="panel p-4 rounded-2xl">
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <h3 className="font-bold text-base text-white flex items-center gap-1.5">
+              {isDelivery ? <Icon name="Truck" size={15} className="text-[#94A3B8]" /> : <Icon name="Wallet" size={15} className="text-[#94A3B8]" />}
+              {isDelivery ? s.deliveryArea : (s.customerName || "بدون اسم زبون")}
+            </h3>
+            <p className="text-xs text-[#94A3B8] mt-0.5">فاتورة #{s.invoiceNumber ?? "?"} · {s.items.length} صنف{(s.branchName || s.dispatchLocation) ? ` · ${s.branchName || s.dispatchLocation}` : ""}</p>
+          </div>
+          <span className="font-bold text-lg text-sky-400 tabular-nums">{s.total}</span>
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t border-white/5">
+          {isDelivery ? (
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${deliveryStatusLabel.color}22`, color: deliveryStatusLabel.color }}>{deliveryStatusLabel.label}</span>
+          ) : (
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
+          )}
+          <span className="text-xs font-bold text-amber-300">{s.employeeName} <span className="text-[#64748B] font-normal">· {new Date(s.createdAt).toLocaleDateString("ar-EG")}</span></span>
+        </div>
+
+        {expanded && (
+          <div className="mt-3 pt-3 border-t border-white/5 space-y-1.5 text-xs">
+            {isDelivery && (
+              <>
+                <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">تليفون الزبون: </span><span dir="ltr">{s.customerPhone}</span></p>
+                {s.repName && <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">المندوب: </span>{s.repName}</p>}
+                {s.deliveryStatus === "done" && <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">طريقة الدفع: </span>{pay.label}</p>}
+                {s.sentBy && <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">سجّل الإرسال: </span>{s.sentBy}{s.sentAt ? ` · ${new Date(s.sentAt).toLocaleString("ar-EG")}` : ""}</p>}
+                {s.receivedBy && <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">أكّد الاستلام: </span>{s.receivedBy}{s.receivedAt ? ` · ${new Date(s.receivedAt).toLocaleString("ar-EG")}` : ""}</p>}
+              </>
+            )}
+            {s.items.map((it, i) => (
+              <div key={i} className="flex items-center justify-between text-[#CBD5E1]">
+                <span>{it.productName} × {it.qty}</span>
+                <span className="tabular-nums">{it.lineTotal}</span>
+              </div>
+            ))}
+            <p className="text-[#CBD5E1] pt-1.5 border-t border-white/5">
+              <span className="text-[#94A3B8]">وقت البيع: </span>
+              {new Date(s.createdAt).toLocaleString("ar-EG")}
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between mt-2">
+          <button onClick={() => setExpandedId(expanded ? null : s.id)} className="text-xs text-sky-400 font-semibold hover:underline">
+            {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
+          </button>
+          <button onClick={() => setPreviewSale(s)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="shop-root">
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="التقارير" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
-        <div className="flex gap-2 mb-4">
-          <button onClick={() => setTab("orders")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${tab === "orders" ? "btn-sky" : "btn-ghost"}`}>الأوردرات</button>
-          <button onClick={() => setTab("sales")} className={`flex-1 rounded-xl py-2.5 text-sm font-bold ${tab === "sales" ? "btn-sky" : "btn-ghost"}`}>فواتير الكاشير</button>
+        <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-[#94A3B8]">
+              {filterType === "orders" ? "أوردرات مؤكدة الدفع" : filterType === "sales" ? "فواتير الكاشير" : "إجمالي العمليات"}
+            </p>
+            <p className="text-2xl font-bold text-emerald-400">{combinedCount}</p>
+          </div>
+          <div className="text-left">
+            <p className="text-xs text-[#94A3B8]">إجمالي المبيعات</p>
+            <p className="text-2xl font-bold text-sky-400 tabular-nums">{combinedTotal}</p>
+          </div>
         </div>
 
-        {tab === "orders" && (
-          <>
-            <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-[#94A3B8]">أوردرات مؤكدة الدفع</p>
-                <p className="text-2xl font-bold text-emerald-400">{paidOrders.length}</p>
-              </div>
-              <div className="text-left">
-                <p className="text-xs text-[#94A3B8]">إجمالي المبيعات</p>
-                <p className="text-2xl font-bold text-sky-400 tabular-nums">{ordersTotal}</p>
-              </div>
-            </div>
+        <button
+          onClick={() => setFilterOpen(true)}
+          className="w-full rounded-xl py-2.5 mb-4 text-sm font-bold btn-ghost flex items-center justify-center gap-2"
+        >
+          فلترة{activeFilterCount > 0 && <span className="bg-sky-500 text-white text-[10px] rounded-full w-5 h-5 flex items-center justify-center">{activeFilterCount}</span>}
+        </button>
 
-            <div className="space-y-3 pb-6">
-              {paidOrders.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لسه مفيش أوردرات مؤكدة الدفع</p>}
-              {paidOrders.map((o) => {
-                const pay = paymentLabel(o);
-                const expanded = expandedId === o.id;
-                return (
-                  <div key={o.id} className="panel p-4 rounded-2xl">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#94A3B8]" /> {o.repName}</h3>
-                        <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.area}</p>
-                      </div>
-                      <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
-                    </div>
-                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                      <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
-                      <span className="text-xs font-bold text-amber-300">{o.employeeName} <span className="text-[#64748B] font-normal">· {new Date(o.createdAt).toLocaleDateString("ar-EG")}</span></span>
-                    </div>
-                    {o.confirmedBy && (
-                      <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
-                    )}
-
-                    {expanded && (
-                      <div className="mt-3 pt-3 border-t border-white/5 space-y-2 text-xs">
-                        {o.dispatchLocation && (
-                          <p className="text-[#CBD5E1]"><span className="text-[#94A3B8]">مكان الخروج: </span>{o.dispatchLocation}</p>
-                        )}
-                        {o.notes && (
-                          <p className="text-[#CBD5E1] bg-black/15 rounded-lg px-2.5 py-1.5">📝 {o.notes}</p>
-                        )}
-                        {o.paymentMethod === "split" && (
-                          <p className="text-[#CBD5E1]">
-                            <span className="text-[#94A3B8]">تفاصيل الدفع: </span>
-                            كاش {o.cashAmount} + تحويل {o.splitTransferMethod === "instapay" ? "انستاباي" : "فودافون كاش"} {o.transferAmount}
-                          </p>
-                        )}
-                        <p className="text-[#CBD5E1]">
-                          <span className="text-[#94A3B8]">وقت الإنشاء: </span>
-                          {new Date(o.createdAt).toLocaleString("ar-EG")}
-                        </p>
-                        {o.confirmedAt && (
-                          <p className="text-[#CBD5E1]">
-                            <span className="text-[#94A3B8]">وقت تأكيد الدفع: </span>
-                            {new Date(o.confirmedAt).toLocaleString("ar-EG")}
-                          </p>
-                        )}
-                        {o.invoiceImage && (
-                          <InvoiceThumb src={o.invoiceImage} className="w-20 h-20 rounded-lg object-cover border border-white/10" />
-                        )}
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between mt-2">
-                      <button onClick={() => setExpandedId(expanded ? null : o.id)} className="text-xs text-sky-400 font-semibold hover:underline">
-                        {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
-                      </button>
-                      <button onClick={() => setPreviewOrder(o)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {tab === "sales" && (
-          <>
-            <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-[#94A3B8]">فواتير الكاشير</p>
-                <p className="text-2xl font-bold text-emerald-400">{sortedSales.length}</p>
-              </div>
-              <div className="text-left">
-                <p className="text-xs text-[#94A3B8]">إجمالي المبيعات</p>
-                <p className="text-2xl font-bold text-sky-400 tabular-nums">{salesTotal}</p>
-              </div>
-            </div>
-
-            <div className="space-y-3 pb-6">
-              {sortedSales.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لسه مفيش فواتير كاشير</p>}
-              {sortedSales.map((s) => {
-                const pay = paymentLabel(s);
-                const expanded = expandedId === s.id;
-                return (
-                  <div key={s.id} className="panel p-4 rounded-2xl">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Wallet" size={15} className="text-[#94A3B8]" /> {s.customerName || "بدون اسم زبون"}</h3>
-                        <p className="text-xs text-[#94A3B8] mt-0.5">فاتورة #{s.invoiceNumber ?? "?"} · {s.items.length} صنف</p>
-                      </div>
-                      <span className="font-bold text-lg text-sky-400 tabular-nums">{s.total}</span>
-                    </div>
-                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                      <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
-                      <span className="text-xs font-bold text-amber-300">{s.employeeName} <span className="text-[#64748B] font-normal">· {new Date(s.createdAt).toLocaleDateString("ar-EG")}</span></span>
-                    </div>
-
-                    {expanded && (
-                      <div className="mt-3 pt-3 border-t border-white/5 space-y-1.5 text-xs">
-                        {s.items.map((it, i) => (
-                          <div key={i} className="flex items-center justify-between text-[#CBD5E1]">
-                            <span>{it.productName} × {it.qty}</span>
-                            <span className="tabular-nums">{it.lineTotal}</span>
-                          </div>
-                        ))}
-                        <p className="text-[#CBD5E1] pt-1.5 border-t border-white/5">
-                          <span className="text-[#94A3B8]">وقت البيع: </span>
-                          {new Date(s.createdAt).toLocaleString("ar-EG")}
-                        </p>
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between mt-2">
-                      <button onClick={() => setExpandedId(expanded ? null : s.id)} className="text-xs text-sky-400 font-semibold hover:underline">
-                        {expanded ? "إخفاء التفاصيل" : "عرض كل التفاصيل"}
-                      </button>
-                      <button onClick={() => setPreviewSale(s)} className="text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1"><Icon name="Printer" size={13} /> طباعة</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
+        <div className="space-y-3 pb-6">
+          {filterType === "all" && (
+            <>
+              {mergedItems.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لسه مفيش عمليات</p>}
+              {mergedItems.map((item) => (item.kind === "order" ? renderOrderCard(item.data) : renderSaleCard(item.data)))}
+            </>
+          )}
+          {filterType === "orders" && (
+            <>
+              {visibleOrders.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لسه مفيش أوردرات مؤكدة الدفع</p>}
+              {visibleOrders.map(renderOrderCard)}
+            </>
+          )}
+          {filterType === "sales" && (
+            <>
+              {visibleSales.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">لسه مفيش فواتير كاشير</p>}
+              {visibleSales.map(renderSaleCard)}
+            </>
+          )}
+        </div>
       </div>
+
+      {filterOpen && (
+        <Modal title="فلترة التقارير" accent="#0EA5E9" onClose={() => setFilterOpen(false)}>
+          <p className="text-xs text-[#94A3B8] mb-1.5">نوع العملية</p>
+          <div className="flex gap-2 mb-4">
+            <button onClick={() => setFilterType("all")} className={`flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "all" ? "btn-sky" : "btn-ghost"}`}>الكل</button>
+            <button onClick={() => setFilterType("orders")} className={`flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "orders" ? "btn-sky" : "btn-ghost"}`}>أوردرات</button>
+            <button onClick={() => setFilterType("sales")} className={`flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "sales" ? "btn-sky" : "btn-ghost"}`}>كاشير</button>
+          </div>
+
+          <p className="text-xs text-[#94A3B8] mb-1.5">الفرع</p>
+          <select
+            value={filterBranch}
+            onChange={(e) => setFilterBranch(e.target.value)}
+            className="field-input w-full rounded-xl px-3 py-2.5 text-sm mb-4"
+          >
+            <option value="all">كل الفروع</option>
+            {(branchSettings?.branches || []).map((b) => (
+              <option key={b} value={b}>{b}</option>
+            ))}
+          </select>
+
+          <button onClick={() => setFilterOpen(false)} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تمام</button>
+        </Modal>
+      )}
+
       {previewOrder && <OrderReceiptPreview order={previewOrder} onClose={() => setPreviewOrder(null)} />}
       {previewSale && <SaleReceiptPreview sale={previewSale} onClose={() => setPreviewSale(null)} />}
     </div>
@@ -4840,6 +5117,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [lastSeen, setLastSeen] = useState({ prices: 0, reports: 0 });
   const [reminder, setReminder] = useState(null);
+  const [notifications, setNotifications] = useState([]);
   const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const remindedDateRef = React.useRef(null);
   const [syncError, setSyncError] = useState(null);
@@ -5018,19 +5296,50 @@ function App() {
       const todayKey = now.toDateString();
       const pastCutoff = now.getHours() > 11 || (now.getHours() === 11 && now.getMinutes() >= 30);
       if (!pastCutoff || remindedDateRef.current === todayKey) return;
-      const mine = orders.filter((o) => !o.paid && o.employeeName === currentUser.name);
+      const mine = sales.filter((s) => s.fulfillment === "delivery" && s.deliveryStatus !== "done" && s.employeeName === currentUser.name);
       if (mine.length > 0) {
         setReminder(mine);
         remindedDateRef.current = todayKey;
+        sendNotification(currentUser.name, `عندك ${mine.length} ${mine.length === 1 ? "أوردر" : "أوردرات"} لسه ما اتقفلش (تجهيز/إرسال)`);
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-          try { new Notification("FaAroon", { body: `عندك ${mine.length} أوردر لسه مدفوعش` }); } catch {}
+          try { new Notification("FaAroon", { body: `عندك ${mine.length} أوردر لسه ما اتقفلش` }); } catch {}
         }
       }
     };
     check();
     const interval = setInterval(check, 60000);
     return () => clearInterval(interval);
-  }, [currentUser, orders]);
+  }, [currentUser, sales]);
+
+  // Notifications bell: load once on login, refresh periodically.
+  useEffect(() => {
+    if (!currentUser) { setNotifications([]); return; }
+    let cancelled = false;
+    const load = async () => {
+      const all = await notificationsStore.loadAll();
+      if (!cancelled && all) {
+        setNotifications(all.filter((n) => n.forUser === currentUser.name).sort((a, b) => b.createdAt - a.createdAt));
+      }
+    };
+    load();
+    const interval = setInterval(load, 60000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [currentUser]);
+
+  const markNotificationRead = (id) => {
+    const target = notifications.find((n) => n.id === id);
+    if (!target || target.read) return;
+    const updated = { ...target, read: true };
+    setNotifications(notifications.map((n) => (n.id === id ? updated : n)));
+    notificationsStore.upsert(updated);
+  };
+
+  const markAllNotificationsRead = () => {
+    const unread = notifications.filter((n) => !n.read);
+    if (!unread.length) return;
+    setNotifications(notifications.map((n) => ({ ...n, read: true })));
+    unread.forEach((n) => notificationsStore.upsert({ ...n, read: true }));
+  };
 
   const handleLogin = async (name, password) => {
     setAuthError("");
@@ -5213,8 +5522,8 @@ function App() {
 
   const hasNew = {
     prices: products.some((p) => (p.updatedAt || p.createdAt || 0) > lastSeen.prices),
-    reports: orders.some((o) => o.paid && (o.confirmedAt || o.createdAt) > lastSeen.reports),
-    ordersPending: orders.some((o) => !o.paid),
+    reports: sales.some((s) => s.fulfillment === "delivery" && s.deliveryStatus === "done" && (s.receivedAt || s.createdAt) > lastSeen.reports),
+    ordersPending: sales.some((s) => s.fulfillment === "delivery" && (s.deliveryStatus === "sent" || (s.deliveryStatus === "prepared" && s.employeeName === currentUser?.name))),
     "stock-alerts": stockAlerts.some((a) => !a.resolved),
   };
 
@@ -5233,6 +5542,9 @@ function App() {
 
   return (
     <div className="shop-root">
+      {currentUser && (
+        <NotificationBell notifications={notifications} onMarkRead={markNotificationRead} onMarkAllRead={markAllNotificationsRead} />
+      )}
       {pendingSyncCount > 0 && (
         <div className="fixed top-3 inset-x-3 z-[65] bg-amber-950/90 border border-amber-700 rounded-2xl p-3 modal-pop max-w-md mx-auto text-center">
           <p className="text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5">
@@ -5252,7 +5564,7 @@ function App() {
         <div className="fixed top-3 inset-x-3 z-[60] panel rounded-2xl p-4 modal-pop max-w-md mx-auto">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="font-bold text-amber-400 text-sm flex items-center gap-1.5"><Icon name="AlertCircle" size={14} /> عندك {reminder.length} أوردر لسه مدفوعش</p>
+              <p className="font-bold text-amber-400 text-sm flex items-center gap-1.5"><Icon name="AlertCircle" size={14} /> عندك {reminder.length} {reminder.length === 1 ? "أوردر" : "أوردرات"} لسه ما اتقفلش</p>
               <button onClick={() => { setReminder(null); nav("orders"); }} className="text-xs text-sky-400 font-semibold mt-2 hover:underline">روح للطلبات دلوقتي</button>
             </div>
             <button onClick={() => setReminder(null)} className="text-[#94A3B8] hover:text-white shrink-0"><Icon name="X" size={16} /></button>
@@ -5286,9 +5598,9 @@ function App() {
           setView={nav}
         />
       )}
-      {screen === "orders" && currentUser && <OrdersScreen user={currentUser} orders={orders} setOrders={setOrders} branchSettings={branchSettings} attendance={attendance} setView={nav} />}
+      {screen === "orders" && currentUser && <OrdersScreen user={currentUser} sales={sales} setSales={setSales} users={users} branchSettings={branchSettings} setView={nav} />}
       {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
-      {screen === "reports" && currentUser && userIsAdmin(currentUser) && <ReportsScreen user={currentUser} orders={orders} sales={sales} setView={nav} />}
+      {screen === "reports" && currentUser && userIsAdmin(currentUser) && <ReportsScreen user={currentUser} orders={orders} sales={sales} branchSettings={branchSettings} setView={nav} />}
       {screen === "stock-alerts" && currentUser && userIsAdmin(currentUser) && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} branchSettings={branchSettings} setView={nav} />}
       {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} branchSettings={branchSettings} setBranchSettings={setBranchSettings} onDevReset={performFullReset} setView={nav} />}
