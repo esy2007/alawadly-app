@@ -2072,9 +2072,9 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
       ) : (
         <div
           className="flex gap-2 mb-4"
-          onTouchStart={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 600); }}
+          onTouchStart={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 2000); }}
           onTouchEnd={() => { if (tierLongPressRef.current) clearTimeout(tierLongPressRef.current); }}
-          onMouseDown={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 600); }}
+          onMouseDown={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 2000); }}
           onMouseUp={() => { if (tierLongPressRef.current) clearTimeout(tierLongPressRef.current); }}
         >
           <TierColorButton
@@ -2105,9 +2105,9 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
         <p
           className="text-center text-lg font-bold mb-3 tabular-nums"
           style={{ color: activeTiers(tierSettings).find((t) => t.id === tierKey)?.color || "#fff" }}
-          onTouchStart={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 600); }}
+          onTouchStart={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
           onTouchEnd={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
-          onMouseDown={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 600); }}
+          onMouseDown={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
           onMouseUp={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
         >
           {displayPrice}
@@ -2218,6 +2218,8 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const [pickerViaScan, setPickerViaScan] = useState(false);
   const [pickerProduct, setPickerProduct] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
+  const [cartNumPad, setCartNumPad] = useState(null); // { id, field: "qty"|"unitPrice", value }
+  const cartLongPressRef = React.useRef(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [fulfillment, setFulfillment] = useState("pickup"); // pickup | delivery
   const [deliveryForm, setDeliveryForm] = useState({ area: "", phone: "", dispatchLocation: "" });
@@ -2377,18 +2379,18 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     playBeep("tap");
   };
 
-  const adjustQty = (id, delta) => {
-    const item = activeInvoice.items.find((it) => it.id === id);
-    if (!item) return;
-    const newQty = item.qty + delta;
-    if (newQty <= 0) {
-      removeFromCart(id);
-      return;
-    }
-    playBeep("tap");
+  const setCartItemField = (id, field, rawValue) => {
+    const num = parseNum(rawValue);
+    if (num === null || num <= 0) return;
     updateActiveInvoice({
-      items: activeInvoice.items.map((it) => (it.id === id ? { ...it, qty: newQty, lineTotal: it.unitPrice * newQty } : it)),
+      items: activeInvoice.items.map((it) => {
+        if (it.id !== id) return it;
+        const qty = field === "qty" ? num : it.qty;
+        const unitPrice = field === "unitPrice" ? num : it.unitPrice;
+        return { ...it, qty, unitPrice, lineTotal: qty * unitPrice };
+      }),
     });
+    playBeep("tap");
   };
 
   const closeInvoice = (id) => {
@@ -2504,8 +2506,9 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   return (
     <div className="shop-root">
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الكاشير" onNav={setView} />
-      <div className="max-w-lg lg:max-w-4xl mx-auto px-4 py-2 fade-up pb-6 lg:flex lg:gap-6 lg:items-start">
-        <div className="lg:flex-1 min-w-0">
+      <div className="max-w-lg lg:max-w-6xl mx-auto px-4 py-2 fade-up pb-6 lg:grid lg:grid-cols-[14rem_28rem_14rem] lg:justify-center lg:gap-6 lg:items-start">
+        <div className="hidden lg:block" />
+        <div className="lg:w-full">
         {usingCachedProducts && (
           <div className="bg-amber-950/40 border border-amber-800 rounded-xl px-3 py-2 mb-3 text-xs text-amber-300 font-bold text-center">
             📴 مفيش اتصال بالنت — الأسعار دي آخر نسخة محفوظة على الفون
@@ -2581,23 +2584,52 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
                 ))}
               </div>
             )}
+            {query && results.length === 0 && (
+              <div className="text-center py-6 mb-4">
+                <Icon name="Search" size={22} className="text-[#475569] mx-auto mb-2" />
+                <p className="text-sm text-[#64748B]">مفيش منتج بالاسم ده</p>
+              </div>
+            )}
 
             <h3 className="font-bold text-sm text-white mb-2">السلة</h3>
             {activeInvoice.items.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
             <div className="space-y-2 mb-4">
               {activeInvoice.items.map((it) => (
-                <div key={it.id} className="panel rounded-xl p-3 flex items-center justify-between gap-2">
-                  <button onClick={() => setEditingItem(it)} className="text-right flex-1 min-w-0">
-                    <p className="font-bold text-sm text-white truncate">{it.productName}</p>
-                    <p className="text-xs text-[#94A3B8]">{it.unitPrice} × {it.qty}</p>
-                  </button>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => adjustQty(it.id, -1)} className="icon-btn rounded-lg w-7 h-7 flex items-center justify-center font-bold text-sm">−</button>
-                    <span className="w-6 text-center text-sm font-bold text-white tabular-nums">{it.qty}</span>
-                    <button onClick={() => adjustQty(it.id, 1)} className="icon-btn rounded-lg w-7 h-7 flex items-center justify-center font-bold text-sm">+</button>
+                <div key={it.id} className="panel rounded-xl p-3">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <button onClick={() => setEditingItem(it)} className="text-right flex-1 min-w-0">
+                      <p className="font-bold text-sm text-white truncate">{it.productName}</p>
+                    </button>
+                    <button onClick={() => removeFromCart(it.id)} className="text-rose-400 shrink-0 p-1"><Icon name="X" size={16} /></button>
                   </div>
-                  <span className="font-bold text-emerald-400 tabular-nums shrink-0 w-14 text-left">{it.lineTotal}</span>
-                  <button onClick={() => removeFromCart(it.id)} className="text-rose-400 shrink-0"><Icon name="X" size={16} /></button>
+                  <div className="flex items-center justify-between text-xs text-[#94A3B8] pt-2 border-t border-white/5">
+                    <button
+                      onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
+                      onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
+                      onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
+                      onMouseUp={() => clearTimeout(cartLongPressRef.current)}
+                      onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
+                      className="text-center"
+                    >
+                      <span className="block text-[10px] text-[#64748B]">الكمية</span>
+                      <span className="font-bold text-white tabular-nums">{it.qty}</span>
+                    </button>
+                    <button
+                      onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
+                      onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
+                      onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
+                      onMouseUp={() => clearTimeout(cartLongPressRef.current)}
+                      onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
+                      className="text-center"
+                    >
+                      <span className="block text-[10px] text-[#64748B]">سعر القطعة</span>
+                      <span className="font-bold text-white tabular-nums">{it.unitPrice}</span>
+                    </button>
+                    <div className="text-left">
+                      <span className="block text-[10px] text-[#64748B]">الإجمالي</span>
+                      <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -2623,7 +2655,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
         </div>
 
         {activeInvoice && !query && topProducts.length > 0 && (
-          <div className="hidden lg:block lg:w-56 lg:shrink-0">
+          <div className="hidden lg:block">
             <p className="text-xs text-[#94A3B8] mb-2">الأكتر مبيعًا</p>
             <div className="space-y-2">
               {topProducts.map((p) => (
@@ -2671,6 +2703,15 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             onUpdate={updateCartItem}
             onSuppressWarning={handleSuppressWarning}
             onClose={() => setEditingItem(null)}
+          />
+        )}
+
+        {cartNumPad && (
+          <NumPad
+            title={cartNumPad.field === "qty" ? "الكمية" : "سعر القطعة"}
+            initialValue={cartNumPad.value}
+            onConfirm={(val) => { setCartItemField(cartNumPad.id, cartNumPad.field, val); setCartNumPad(null); }}
+            onClose={() => setCartNumPad(null)}
           />
         )}
 
