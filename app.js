@@ -2200,6 +2200,36 @@ function makeEmptyInvoice(tierKey, label, customerName, invoiceNumber) {
   return { id: uid(), label, invoiceNumber, tierKey, customerName: customerName || "", items: [], suppressYellow: false, suppressRed: false };
 }
 
+// Small product photo shown on each cart line; tapping it opens the same
+// large in-page lightbox pattern used elsewhere in the app (ProductThumb/InvoiceThumb).
+function CartThumb({ src }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => src && setOpen(true)}
+        className="w-11 h-11 rounded-xl overflow-hidden bg-black/25 flex items-center justify-center shrink-0 border border-white/5"
+      >
+        {src ? <img src={src} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={18} className="text-[#475569]" />}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-6 modal-backdrop" onClick={() => setOpen(false)}>
+          <div className="relative" style={{ width: "75vw", height: "75vh" }} onClick={(e) => e.stopPropagation()}>
+            <img src={src} alt="" className="w-full h-full object-contain rounded-2xl" />
+            <button
+              onClick={() => setOpen(false)}
+              className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-black/70 flex items-center justify-center text-white"
+            >
+              <Icon name="X" size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, setView }) {
   const [invoices, setInvoices] = useState(() => (loadCashierInvoices()?.invoices) || []);
   const [activeId, setActiveId] = useState(() => {
@@ -2275,15 +2305,17 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const results = normalizedQuery ? products.filter((p) => normalizeArabic(p.name).includes(normalizedQuery)).slice(0, 12) : [];
   const total = activeInvoice ? activeInvoice.items.reduce((s, it) => s + it.lineTotal, 0) : 0;
 
+  const cartProductIds = activeInvoice ? activeInvoice.items.map((it) => it.productId) : [];
+
   useEffect(() => {
-    const visibleIds = [...results.map((p) => p.id), ...topProducts.map((p) => p.id)];
+    const visibleIds = [...results.map((p) => p.id), ...topProducts.map((p) => p.id), ...cartProductIds];
     const missing = [...new Set(visibleIds)].filter((id) => !(id in imageCache));
     if (missing.length === 0) return;
     batchGetImages(missing).then((map) => {
       setImageCache((c) => ({ ...c, ...Object.fromEntries(missing.map((id) => [id, map[id] || null])) }));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results.map((p) => p.id).join(","), topProducts.map((p) => p.id).join(",")]);
+  }, [results.map((p) => p.id).join(","), topProducts.map((p) => p.id).join(","), cartProductIds.join(",")]);
 
   const createInvoice = async (tierKey, customerName) => {
     setCreatingInvoice(true);
@@ -2602,32 +2634,35 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
                     </button>
                     <button onClick={() => removeFromCart(it.id)} className="text-rose-400 shrink-0 p-1"><Icon name="X" size={16} /></button>
                   </div>
-                  <div className="flex items-center justify-between text-xs text-[#94A3B8] pt-2 border-t border-white/5">
-                    <button
-                      onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
-                      onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
-                      onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
-                      onMouseUp={() => clearTimeout(cartLongPressRef.current)}
-                      onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
-                      className="text-center"
-                    >
-                      <span className="block text-[10px] text-[#64748B]">الكمية</span>
-                      <span className="font-bold text-white tabular-nums">{it.qty}</span>
-                    </button>
-                    <button
-                      onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
-                      onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
-                      onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
-                      onMouseUp={() => clearTimeout(cartLongPressRef.current)}
-                      onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
-                      className="text-center"
-                    >
-                      <span className="block text-[10px] text-[#64748B]">سعر القطعة</span>
-                      <span className="font-bold text-white tabular-nums">{it.unitPrice}</span>
-                    </button>
-                    <div className="text-left">
-                      <span className="block text-[10px] text-[#64748B]">الإجمالي</span>
-                      <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
+                  <div className="flex items-center gap-2.5 pt-2 border-t border-white/5">
+                    <CartThumb src={imageCache[it.productId]} />
+                    <div className="flex items-center justify-between flex-1 min-w-0 text-xs text-[#94A3B8]">
+                      <button
+                        onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
+                        onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
+                        onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
+                        onMouseUp={() => clearTimeout(cartLongPressRef.current)}
+                        onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
+                        className="text-center"
+                      >
+                        <span className="block text-[10px] text-[#64748B]">الكمية</span>
+                        <span className="font-bold text-white tabular-nums">{it.qty}</span>
+                      </button>
+                      <button
+                        onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
+                        onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
+                        onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
+                        onMouseUp={() => clearTimeout(cartLongPressRef.current)}
+                        onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
+                        className="text-center"
+                      >
+                        <span className="block text-[10px] text-[#64748B]">سعر القطعة</span>
+                        <span className="font-bold text-white tabular-nums">{it.unitPrice}</span>
+                      </button>
+                      <div className="text-left">
+                        <span className="block text-[10px] text-[#64748B]">الإجمالي</span>
+                        <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
