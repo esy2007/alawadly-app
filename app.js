@@ -1280,21 +1280,21 @@ function Header({ user, onLogout, title, onBack, onNav, hideMenu }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   return (
     <>
-      <div className="header-bar mx-4 mt-4 mb-2 flex justify-between items-center p-4 rounded-2xl shadow-lg">
-        <div className="text-right flex items-center gap-3">
+      <div className="header-bar mx-4 mt-3 mb-2 flex justify-between items-center px-3.5 py-2.5 rounded-2xl shadow-lg">
+        <div className="text-right flex items-center gap-2.5 min-w-0">
           {onBack && (
-            <button onClick={onBack} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
+            <button onClick={onBack} className="shrink-0 bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
               <Icon name="ChevronLeft" size={18} />
             </button>
           )}
-          <div>
-            <h1 className="text-xl font-bold text-white tracking-wide">{title}</h1>
-            <p className="text-white/85 text-xs mt-0.5">
+          <div className="min-w-0">
+            <h1 className="text-lg font-bold text-white tracking-wide leading-tight truncate">{title}</h1>
+            <p className="text-white/85 text-[11px] mt-0.5 leading-tight truncate">
               {user.name} · <span className="font-semibold">{userIsAdmin(user) ? "أدمن" : "موظف"}</span>
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           {onNav && (
             <button onClick={() => onNav("settings")} className="bg-black/20 hover:bg-black/30 text-white p-2 rounded-xl transition-all">
               <Icon name="Settings" size={17} />
