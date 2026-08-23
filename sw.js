@@ -1,5 +1,5 @@
-const CACHE_NAME = "alawadly-v202608232258";
-const CORE_ASSETS = ["./index.html", "./style.css?v=202608190923", "./app.js?v=202608232258", "./manifest.json"];
+const CACHE_NAME = "alawadly-v202608232321";
+const CORE_ASSETS = ["./index.html", "./style.css?v=202608190923", "./app.js?v=202608232321", "./manifest.json"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

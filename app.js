@@ -2209,9 +2209,9 @@ function CartThumb({ src }) {
       <button
         type="button"
         onClick={() => src && setOpen(true)}
-        className="w-11 h-11 rounded-xl overflow-hidden bg-black/25 flex items-center justify-center shrink-0 border border-white/5"
+        className="w-16 rounded-2xl overflow-hidden bg-black/25 flex items-center justify-center shrink-0 border border-white/5"
       >
-        {src ? <img src={src} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={18} className="text-[#475569]" />}
+        {src ? <img src={src} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={20} className="text-[#475569]" />}
       </button>
       {open && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center p-6 modal-backdrop" onClick={() => setOpen(false)}>
@@ -2627,39 +2627,42 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             {activeInvoice.items.length === 0 && <p className="text-center text-[#64748B] py-8 text-sm">السلة فاضية، دوّر على منتج فوق</p>}
             <div className="space-y-2 mb-4">
               {activeInvoice.items.map((it) => (
-                <div key={it.id} className="panel rounded-xl p-3">
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <button onClick={() => setEditingItem(it)} className="text-right flex-1 min-w-0">
-                      <p className="font-bold text-sm text-white truncate">{it.productName}</p>
-                    </button>
-                    <button onClick={() => removeFromCart(it.id)} className="text-rose-400 shrink-0 p-1"><Icon name="X" size={16} /></button>
-                  </div>
-                  <div className="flex items-center gap-2.5 pt-2 border-t border-white/5">
-                    <CartThumb src={imageCache[it.productId]} />
-                    <div className="flex items-center justify-between flex-1 min-w-0 text-xs text-[#94A3B8]">
+                <div key={it.id} className="panel rounded-xl p-3 flex items-stretch gap-3">
+                  <CartThumb src={imageCache[it.productId]} />
+                  <div className="w-px bg-white/10 self-stretch shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <button onClick={() => setEditingItem(it)} className="text-right flex-1 min-w-0">
+                        <p className="font-bold text-sm text-white truncate">{it.productName}</p>
+                      </button>
+                      <button onClick={() => removeFromCart(it.id)} className="text-rose-400 shrink-0 p-1"><Icon name="X" size={16} /></button>
+                    </div>
+                    <div className="flex items-center text-xs text-[#94A3B8] pt-2 border-t border-white/5">
                       <button
                         onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
                         onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
                         onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "qty", value: String(it.qty) }), 2000); }}
                         onMouseUp={() => clearTimeout(cartLongPressRef.current)}
                         onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
-                        className="text-center"
+                        className="flex-1 text-center"
                       >
                         <span className="block text-[10px] text-[#64748B]">الكمية</span>
                         <span className="font-bold text-white tabular-nums">{it.qty}</span>
                       </button>
+                      <div className="w-px h-7 bg-white/10 shrink-0" />
                       <button
                         onTouchStart={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
                         onTouchEnd={() => clearTimeout(cartLongPressRef.current)}
                         onMouseDown={() => { cartLongPressRef.current = setTimeout(() => setCartNumPad({ id: it.id, field: "unitPrice", value: String(it.unitPrice) }), 2000); }}
                         onMouseUp={() => clearTimeout(cartLongPressRef.current)}
                         onMouseLeave={() => clearTimeout(cartLongPressRef.current)}
-                        className="text-center"
+                        className="flex-1 text-center"
                       >
                         <span className="block text-[10px] text-[#64748B]">سعر القطعة</span>
                         <span className="font-bold text-white tabular-nums">{it.unitPrice}</span>
                       </button>
-                      <div className="text-left">
+                      <div className="w-px h-7 bg-white/10 shrink-0" />
+                      <div className="flex-1 text-center">
                         <span className="block text-[10px] text-[#64748B]">الإجمالي</span>
                         <span className="font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
                       </div>
