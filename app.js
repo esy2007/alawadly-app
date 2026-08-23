@@ -2632,7 +2632,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
                   <div className="w-px bg-white/10 self-stretch shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2 mb-2">
-                      <button onClick={() => setEditingItem(it)} className="text-right flex-1 min-w-0">
+                      <button onClick={() => setEditingItem(it)} className="text-center flex-1 min-w-0">
                         <p className="font-bold text-sm text-white truncate">{it.productName}</p>
                       </button>
                       <button onClick={() => removeFromCart(it.id)} className="text-rose-400 shrink-0 p-1"><Icon name="X" size={16} /></button>
