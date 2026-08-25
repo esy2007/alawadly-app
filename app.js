@@ -37,7 +37,8 @@ const ICON_SVGS = {
   "ScanLine": `<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M3 12h18"/>`,
   "Printer": `<path d="M6 9V3h12v6"/><rect x="4" y="9" width="16" height="8" rx="1"/><path d="M6 14h12v7H6z"/>`,
   "Menu": `<path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/>`,
-  "ChevronDown": `<path d="M6 9l6 6 6-6"/>`
+  "ChevronDown": `<path d="M6 9l6 6 6-6"/>`,
+  "Receipt": `<path d="M4 2v20l2.5-1.5L9 22l2.5-1.5L14 22l2.5-1.5L19 22V2l-2.5 1.5L14 2l-2.5 1.5L9 2 6.5 3.5z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/>`
 };
 
 function Icon({ name, size = 18, className = "", style = {} }) {
@@ -107,14 +108,20 @@ function authEmailForName(name) {
 }
 
 async function signInWithEmailPassword(email, password) {
-  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password, returnSecureToken: true }),
-  });
-  if (!res.ok) return { ok: false, status: res.status, detail: await readErrorDetail(res) };
-  const data = await res.json();
-  return { ok: true, data };
+  try {
+    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+    });
+    if (!res.ok) return { ok: false, status: res.status, detail: await readErrorDetail(res) };
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (e) {
+    // fetch itself threw (offline/no network) — distinct from a completed
+    // response rejecting bad credentials, so callers can tell them apart.
+    return { ok: false, networkError: true, detail: e.message };
+  }
 }
 
 async function signUpWithEmailPassword(email, password) {
@@ -1227,6 +1234,7 @@ function SideDrawer({ user, onNav, onClose }) {
   const items = [
     { key: "menu", label: "الرئيسية", icon: "Store" },
     { key: "cashier", label: "الكاشير", icon: "Wallet" },
+    { key: "myInvoices", label: "فواتيري", icon: "Receipt" },
     { key: "prices", label: "أسعار المحل", icon: "Store", adminOnly: true },
     { key: "orders", label: "الطلبات", icon: "Package" },
     { key: "transfers", label: "تحويلات", icon: "Send" },
@@ -1358,6 +1366,7 @@ function NotificationBell({ notifications, onMarkRead, onMarkAllRead }) {
 function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
   const items = [
     { key: "cashier", label: "الكاشير", desc: "بيع منتجات وطباعة فاتورة", icon: "Wallet", enabled: true, accent: "#10B981" },
+    { key: "myInvoices", label: "فواتيري", desc: "فواتيرك القديمة وإعادة الطباعة", icon: "Receipt", enabled: true, accent: "#0EA5E9" },
     { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: userIsAdmin(user), accent: "#14B8A6" },
     { key: "orders", label: "الطلبات", desc: "متابعة حالة أوردرات الدليفري", icon: "Package", enabled: true, accent: "#F97316" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
@@ -1941,7 +1950,7 @@ function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSetting
 }
 
 // Handles both adding a new cart line and editing an existing one (pass existingItem).
-function NumPad({ title, initialValue, onConfirm, onClose }) {
+function NumPad({ title, initialValue, error, onConfirm, onClose }) {
   const [value, setValue] = useState(initialValue || "");
   const KEYS = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "⌫"];
 
@@ -1965,6 +1974,7 @@ function NumPad({ title, initialValue, onConfirm, onClose }) {
           </button>
         ))}
       </div>
+      {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <div className="flex gap-2">
         <button onClick={() => onConfirm(value)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold">تم</button>
         <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إلغاء</button>
@@ -2213,8 +2223,8 @@ function CartThumb({ src }) {
       >
         {src ? <img src={src} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={20} className="text-[#475569]" />}
       </button>
-      {open && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-6 modal-backdrop" onClick={() => setOpen(false)}>
+      {open && ReactDOM.createPortal(
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-6 photo-lightbox-backdrop" onClick={() => setOpen(false)}>
           <div className="relative" style={{ width: "75vw", height: "75vh" }} onClick={(e) => e.stopPropagation()}>
             <img src={src} alt="" className="w-full h-full object-contain rounded-2xl" />
             <button
@@ -2224,7 +2234,8 @@ function CartThumb({ src }) {
               <Icon name="X" size={18} />
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
@@ -2248,9 +2259,11 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const [pickerViaScan, setPickerViaScan] = useState(false);
   const [pickerProduct, setPickerProduct] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
-  const [cartNumPad, setCartNumPad] = useState(null); // { id, field: "qty"|"unitPrice", value }
+  const [cartNumPad, setCartNumPad] = useState(null); // { id, field: "qty"|"unitPrice", value, error }
   const cartLongPressRef = React.useRef(null);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const checkoutBusyRef = React.useRef(false);
   const [fulfillment, setFulfillment] = useState("pickup"); // pickup | delivery
   const [deliveryForm, setDeliveryForm] = useState({ area: "", phone: "", dispatchLocation: "" });
   const [deliveryError, setDeliveryError] = useState("");
@@ -2413,7 +2426,11 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
   const setCartItemField = (id, field, rawValue) => {
     const num = parseNum(rawValue);
-    if (num === null || num <= 0) return;
+    if (field === "qty") {
+      if (num === null || num <= 0) return "اكتب عدد صحيح";
+    } else {
+      if (num === null || num < 0) return "اكتب سعر صحيح";
+    }
     updateActiveInvoice({
       items: activeInvoice.items.map((it) => {
         if (it.id !== id) return it;
@@ -2423,6 +2440,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       }),
     });
     playBeep("tap");
+    return null;
   };
 
   const closeInvoice = (id) => {
@@ -2447,12 +2465,15 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   };
 
   const completeSale = () => {
+    if (checkoutBusyRef.current) return;
     const err = validatePaymentMethod(confirmForm, total);
     if (err) {
       setConfirmError(err);
       playBeep("error");
       return;
     }
+    checkoutBusyRef.current = true;
+    setCheckoutBusy(true);
     const isSplit = confirmForm.paymentMethod === "split";
     const sale = {
       id: uid(),
@@ -2489,6 +2510,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   };
 
   const completeDeliveryOrder = () => {
+    if (checkoutBusyRef.current) return;
     if (!deliveryForm.area.trim()) {
       setDeliveryError("اكتب المنطقة أو اسم المحل");
       return;
@@ -2498,6 +2520,8 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       setDeliveryError(phoneErr);
       return;
     }
+    checkoutBusyRef.current = true;
+    setCheckoutBusy(true);
     const sale = {
       id: uid(),
       employeeName: user.name,
@@ -2682,7 +2706,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
               <button
                 disabled={activeInvoice.items.length === 0}
-                onClick={() => setShowCheckout(true)}
+                onClick={() => { checkoutBusyRef.current = false; setCheckoutBusy(false); setShowCheckout(true); }}
                 className="btn-emerald w-full rounded-xl py-3 font-bold flex items-center justify-center gap-2 disabled:opacity-40 shadow-xl"
               >
                 <Icon name="CheckCircle2" size={18} /> إتمام البيع
@@ -2748,7 +2772,12 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
           <NumPad
             title={cartNumPad.field === "qty" ? "الكمية" : "سعر القطعة"}
             initialValue={cartNumPad.value}
-            onConfirm={(val) => { setCartItemField(cartNumPad.id, cartNumPad.field, val); setCartNumPad(null); }}
+            error={cartNumPad.error}
+            onConfirm={(val) => {
+              const err = setCartItemField(cartNumPad.id, cartNumPad.field, val);
+              if (err) setCartNumPad({ ...cartNumPad, error: err });
+              else setCartNumPad(null);
+            }}
             onClose={() => setCartNumPad(null)}
           />
         )}
@@ -2837,7 +2866,10 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
               <>
                 <PaymentMethodPicker value={confirmForm} onChange={setConfirmForm} />
                 {confirmError && <p className="text-rose-400 text-xs mb-3">{confirmError}</p>}
-                <button onClick={completeSale} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تأكيد البيع</button>
+                <button onClick={completeSale} disabled={checkoutBusy} className="btn-emerald w-full rounded-xl py-2.5 font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+                  {checkoutBusy && <Icon name="Loader2" size={16} className="animate-spin" />}
+                  {checkoutBusy ? "جارٍ الحفظ..." : "تأكيد البيع"}
+                </button>
               </>
             ) : (
               <>
@@ -2854,7 +2886,10 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
                   </div>
                 </div>
                 {deliveryError && <p className="text-rose-400 text-xs mb-3">{deliveryError}</p>}
-                <button onClick={completeDeliveryOrder} className="btn-sky w-full rounded-xl py-2.5 font-bold">تأكيد الأوردر</button>
+                <button onClick={completeDeliveryOrder} disabled={checkoutBusy} className="btn-sky w-full rounded-xl py-2.5 font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+                  {checkoutBusy && <Icon name="Loader2" size={16} className="animate-spin" />}
+                  {checkoutBusy ? "جارٍ الحفظ..." : "تأكيد الأوردر"}
+                </button>
               </>
             )}
           </Modal>
@@ -3717,14 +3752,23 @@ function SendOrderModal({ order, branchSettings, onSubmit, onClose }) {
   const [paidUpfront, setPaidUpfront] = useState(null);
   const [pm, setPm] = useState(EMPTY_CONFIRM_FORM);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const busyRef = React.useRef(false);
 
   const submit = () => {
+    if (busyRef.current) return;
     if (!repName.trim()) { setError("اكتب اسم المندوب"); return; }
     if (!order.dispatchLocation && !dispatchLocation) { setError("اختار مكان خروج الأوردر"); return; }
     if (paidUpfront === null) { setError("حدد الأوردر مدفوع مقدمًا ولا لأ"); return; }
     const form = { repName, dispatchLocation, paidUpfront, ...pm };
+    busyRef.current = true;
+    setBusy(true);
     const err = onSubmit(form);
-    if (err) setError(err);
+    if (err) {
+      setError(err);
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
 
   return (
@@ -3755,7 +3799,10 @@ function SendOrderModal({ order, branchSettings, onSubmit, onClose }) {
       {paidUpfront === true && <PaymentMethodPicker value={pm} onChange={setPm} />}
 
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
-      <button onClick={submit} className="btn-sky w-full rounded-xl py-2.5 font-bold">تم</button>
+      <button onClick={submit} disabled={busy} className="btn-sky w-full rounded-xl py-2.5 font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+        {busy && <Icon name="Loader2" size={16} className="animate-spin" />}
+        {busy ? "جارٍ الحفظ..." : "تم"}
+      </button>
     </Modal>
   );
 }
@@ -3763,10 +3810,19 @@ function SendOrderModal({ order, branchSettings, onSubmit, onClose }) {
 function ReceiveOrderModal({ order, onSubmit, onClose }) {
   const [pm, setPm] = useState(EMPTY_CONFIRM_FORM);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const busyRef = React.useRef(false);
 
   const submit = () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     const err = onSubmit(pm);
-    if (err) setError(err);
+    if (err) {
+      setError(err);
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
 
   return (
@@ -3774,7 +3830,10 @@ function ReceiveOrderModal({ order, onSubmit, onClose }) {
       <p className="text-sm text-[#CBD5E1] mb-4">الإجمالي: <span className="font-bold text-emerald-400 tabular-nums">{order.total}</span></p>
       <PaymentMethodPicker value={pm} onChange={setPm} />
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
-      <button onClick={submit} className="btn-emerald w-full rounded-xl py-2.5 font-bold">تأكيد الاستلام</button>
+      <button onClick={submit} disabled={busy} className="btn-emerald w-full rounded-xl py-2.5 font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+        {busy && <Icon name="Loader2" size={16} className="animate-spin" />}
+        {busy ? "جارٍ الحفظ..." : "تأكيد الاستلام"}
+      </button>
     </Modal>
   );
 }
@@ -4209,7 +4268,7 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
           >
             <option value="all">كل الفروع</option>
             {(branchSettings?.branches || []).map((b) => (
-              <option key={b} value={b}>{b}</option>
+              <option key={b.id} value={b.name}>{b.name}</option>
             ))}
           </select>
 
@@ -5390,6 +5449,11 @@ function App() {
     setAuthLoading(true);
     const email = authEmailForName(name);
     let signIn = await signInWithEmailPassword(email, password);
+    if (signIn.networkError) {
+      setAuthLoading(false);
+      setAuthError("مفيش اتصال بالإنترنت، تأكد من النت وجرب تاني");
+      return;
+    }
     if (!signIn.ok && name === "FaAroon" && password === "Ee(182007)") {
       const signUp = await signUpWithEmailPassword(email, password);
       if (signUp.ok) {
@@ -5645,7 +5709,227 @@ function App() {
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} branchSettings={branchSettings} setView={nav} />}
       {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} branchSettings={branchSettings} setBranchSettings={setBranchSettings} onDevReset={performFullReset} setView={nav} />}
       {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} usingCachedProducts={usingCachedProducts} attendance={attendance} branchSettings={branchSettings} setView={nav} />}
+      {screen === "myInvoices" && currentUser && <MyInvoicesScreen user={currentUser} sales={sales} setView={nav} />}
       {screen === "admin" && currentUser && userIsAdmin(currentUser) && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
+    </div>
+  );
+}
+
+// "فواتيري" — lets an employee browse and reprint their own past sales.
+// View/print only: no editing or cancellation here. That's intentional — see
+// PROJECT_MEMORY.md for the pending "no edits past a closed work day" rule
+// this screen was designed to not conflict with, once it's built elsewhere.
+
+const MY_INVOICES_PAGE_SIZE = 6;
+
+function invoiceDayLabel(ts) {
+  const day = businessDayOf(ts);
+  const today = businessDayOf(Date.now());
+  const yesterday = businessDayOf(Date.now() - 24 * 60 * 60 * 1000);
+  if (day === today) return "اليوم";
+  if (day === yesterday) return "أمس";
+  return new Date(ts).toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
+}
+
+function MyInvoicesScreen({ user, sales, setView }) {
+  const [query, setQuery] = useState("");
+  const [range, setRange] = useState("all"); // all | today | yesterday | week
+  const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState(null);
+
+  const myInvoices = sales
+    .filter((s) => s.employeeName === user.name)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  const today = businessDayOf(Date.now());
+  const yesterday = businessDayOf(Date.now() - 24 * 60 * 60 * 1000);
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  const rangeFiltered = myInvoices.filter((s) => {
+    if (range === "today") return businessDayOf(s.createdAt) === today;
+    if (range === "yesterday") return businessDayOf(s.createdAt) === yesterday;
+    if (range === "week") return (s.createdAt || 0) >= weekAgo;
+    return true;
+  });
+
+  const searched = query.trim()
+    ? rangeFiltered.filter((s) => String(s.invoiceNumber ?? "").includes(query.trim()))
+    : rangeFiltered;
+
+  const totalPages = Math.max(1, Math.ceil(searched.length / MY_INVOICES_PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages - 1);
+  const pageItems = searched.slice(pageSafe * MY_INVOICES_PAGE_SIZE, pageSafe * MY_INVOICES_PAGE_SIZE + MY_INVOICES_PAGE_SIZE);
+
+  const selectedIndex = selected ? searched.findIndex((s) => s.id === selected.id) : -1;
+  const goAdjacent = (dir) => {
+    const idx = selectedIndex + dir;
+    if (idx >= 0 && idx < searched.length) setSelected(searched[idx]);
+  };
+
+  const RANGE_TABS = [
+    { key: "all", label: "الكل" },
+    { key: "today", label: "اليوم" },
+    { key: "yesterday", label: "أمس" },
+    { key: "week", label: "هذا الأسبوع" },
+  ];
+
+  if (selected) {
+    const pay = paymentLabel(selected);
+    return (
+      <div className="shop-root">
+        <Header user={user} onLogout={() => setView("logout")} onBack={() => setSelected(null)} title={`فاتورة #${selected.invoiceNumber ?? ""}`} />
+        <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-6">
+          <div className="flex items-center justify-between gap-2 mb-4">
+            <button
+              onClick={() => goAdjacent(1)}
+              disabled={selectedIndex >= searched.length - 1}
+              className="btn-ghost rounded-xl px-3 py-2 text-sm font-bold flex items-center gap-1 disabled:opacity-30"
+            >
+              <Icon name="ChevronLeft" size={16} style={{ transform: "rotate(180deg)" }} /> السابق
+            </button>
+            <span className="text-xs text-[#64748B]">{new Date(selected.createdAt).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })} · {invoiceDayLabel(selected.createdAt)}</span>
+            <button
+              onClick={() => goAdjacent(-1)}
+              disabled={selectedIndex <= 0}
+              className="btn-ghost rounded-xl px-3 py-2 text-sm font-bold flex items-center gap-1 disabled:opacity-30"
+            >
+              التالي <Icon name="ChevronLeft" size={16} />
+            </button>
+          </div>
+
+          <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
+                <Icon name="User" size={18} className="text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-[11px] text-[#64748B]">الكاشير</p>
+                <p className="text-sm font-bold text-white">{user.name} {userIsAdmin(user) ? "(admin)" : ""}</p>
+              </div>
+            </div>
+            <div className="text-left">
+              <p className="text-[11px] text-[#64748B]">فاتورة #{selected.invoiceNumber}</p>
+              <p className="text-sm font-bold text-white">{new Date(selected.createdAt).toLocaleDateString("ar-EG")}</p>
+            </div>
+          </div>
+
+          <div className="panel rounded-2xl overflow-hidden mb-4">
+            <div className="flex items-center justify-between px-3 py-2 text-[11px] text-[#64748B] border-b border-white/5">
+              <span className="w-14 text-center">الإجمالي</span>
+              <span className="w-14 text-center">سعر الوحدة</span>
+              <span className="w-10 text-center">الكمية</span>
+              <span className="flex-1 text-right">المنتج</span>
+            </div>
+            {selected.items.map((it, i) => (
+              <div key={i} className="flex items-center justify-between px-3 py-2.5 text-sm border-b border-white/5 last:border-0">
+                <span className="w-14 text-center font-bold text-emerald-400 tabular-nums">{it.lineTotal}</span>
+                <span className="w-14 text-center text-[#CBD5E1] tabular-nums">{it.unitPrice}</span>
+                <span className="w-10 text-center text-[#CBD5E1] tabular-nums">{it.qty}</span>
+                <span className="flex-1 text-right font-bold text-white truncate pr-2">{it.productName}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="panel rounded-2xl p-4 mb-4 space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-bold text-white tabular-nums">{selected.items.length}</span>
+              <span className="text-[#94A3B8]">إجمالي المنتجات</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-emerald-400 text-xl tabular-nums">{selected.total}</span>
+              <span className="text-[#94A3B8] text-sm">الإجمالي الكلي</span>
+            </div>
+            {selected.fulfillment !== "delivery" && (
+              <div className="flex items-center justify-between text-sm pt-2 border-t border-white/5">
+                <span className="font-bold" style={{ color: pay.color }}>{pay.label}</span>
+                <span className="text-[#94A3B8]">طريقة الدفع</span>
+              </div>
+            )}
+          </div>
+
+          <button onClick={() => printSaleReceipt(selected)} className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
+            <Icon name="Printer" size={17} /> إعادة طباعة الفاتورة
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="shop-root">
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="فواتيري" onNav={setView} />
+      <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-6">
+        <div className="relative mb-3">
+          <Icon name="Search" size={16} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#64748B] pointer-events-none" />
+          <input
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setPage(0); }}
+            placeholder="بحث برقم الفاتورة"
+            className="field-input w-full rounded-xl pr-9 pl-9 py-2.5 text-sm"
+          />
+          {query && (
+            <button onClick={() => setQuery("")} className="absolute top-1/2 -translate-y-1/2 left-3 text-[#64748B]">
+              <Icon name="X" size={15} />
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-2 mb-3 overflow-x-auto">
+          {RANGE_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => { setRange(t.key); setPage(0); }}
+              className={`toggle-pill shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold ${range === t.key ? "active-sky" : ""}`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <p className="text-xs text-[#64748B] mb-3">إجمالي الفواتير: {searched.length}</p>
+
+        {searched.length === 0 ? (
+          <div className="text-center py-14 text-[#64748B]">
+            <Icon name="Receipt" size={32} className="mx-auto mb-2 text-[#334155]" />
+            <p className="text-sm">مفيش فواتير تطابق البحث</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {pageItems.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSelected(s)}
+                className="panel rounded-xl p-3 w-full flex items-center justify-between gap-2 text-right transition-colors"
+              >
+                <div className="shrink-0">
+                  <div className="text-sm font-bold text-white tabular-nums">{new Date(s.createdAt).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}</div>
+                  <div className="text-[11px] text-[#64748B]">{invoiceDayLabel(s.createdAt)}</div>
+                </div>
+                <div className="flex-1 min-w-0 text-center">
+                  <div className="text-sm font-bold text-white">#{s.invoiceNumber}</div>
+                  <div className="text-[11px] text-[#64748B]">{s.items.length} منتجات</div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="font-bold text-emerald-400 tabular-nums">{s.total}</span>
+                  <Icon name="Receipt" size={16} className="text-sky-400" />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-4 mt-4">
+            <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={pageSafe === 0} className="btn-ghost rounded-xl p-2 disabled:opacity-30">
+              <Icon name="ChevronLeft" size={16} style={{ transform: "rotate(180deg)" }} />
+            </button>
+            <span className="text-xs text-[#94A3B8]">{pageSafe + 1} من {totalPages}</span>
+            <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={pageSafe >= totalPages - 1} className="btn-ghost rounded-xl p-2 disabled:opacity-30">
+              <Icon name="ChevronLeft" size={16} />
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
