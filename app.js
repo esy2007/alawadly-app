@@ -179,12 +179,25 @@ async function doAuth() {
   if (!authState.refreshToken) {
     throw new Error("not signed in");
   }
-  const res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=refresh_token&refresh_token=${authState.refreshToken}`,
-  });
+  let res;
+  try {
+    res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=refresh_token&refresh_token=${authState.refreshToken}`,
+    });
+  } catch (e) {
+    // The request never reached the server (offline/timeout) — this says
+    // nothing about whether the refresh token itself is still valid, so we
+    // must NOT clear it here. Tag the error so callers (e.g. boot) can tell
+    // this apart from a real "your session is over" rejection below.
+    const netErr = new Error(`auth network error: ${e.message}`);
+    netErr.isNetworkError = true;
+    throw netErr;
+  }
   if (!res.ok) {
+    // The server was reachable and explicitly rejected the refresh token —
+    // this is a real, confirmed end of the session.
     clearAuthTokens();
     const detail = await readErrorDetail(res);
     notifyStoreError("تسجيل الدخول (Auth)", detail);
@@ -887,10 +900,14 @@ function escapeHtml(str) {
 // Opens a new tab formatted for an 80mm thermal receipt roll and triggers the
 // native Android print dialog, so it works with any printer already set up as
 // an Android print service (most Bluetooth/WiFi receipt printers support this).
-function printOrderReceipt(order) {
+// See printSaleReceipt above for the return/onFail contract — identical here.
+function printOrderReceipt(order, onFail) {
   const pay = paymentLabel(order);
   const win = window.open("", "_blank");
-  if (!win) return;
+  if (!win) {
+    if (onFail) onFail("popup");
+    return false;
+  }
   const dateStr = new Date(order.createdAt).toLocaleString("ar-EG");
   win.document.write(`<!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -927,14 +944,30 @@ function printOrderReceipt(order) {
 </html>`);
   win.document.close();
   win.focus();
-  setTimeout(() => { win.print(); }, 300);
+  setTimeout(() => {
+    try {
+      win.print();
+    } catch (e) {
+      if (onFail) onFail("print");
+    }
+  }, 300);
+  return true;
 }
 
 // Same 80mm-thermal-roll approach as printOrderReceipt, but itemized for a cashier sale.
-function printSaleReceipt(sale) {
+// Returns false only when window.open() itself failed (a real, synchronously-known
+// problem — e.g. a blocked popup). Returning true means "no problem was detected
+// opening the print window", not "the printer actually produced paper" — that part
+// can't be verified from here. onFail(reason), if given, is also called for the
+// delayed win.print() failure case, which happens after this function has already
+// returned and so can't be reported through the return value.
+function printSaleReceipt(sale, onFail) {
   const pay = paymentLabel(sale);
   const win = window.open("", "_blank");
-  if (!win) return;
+  if (!win) {
+    if (onFail) onFail("popup");
+    return false;
+  }
   const dateStr = new Date(sale.createdAt).toLocaleString("ar-EG");
   const itemsHtml = sale.items
     .map((it) => `<div class="row"><span>${escapeHtml(it.productName)} × ${it.qty}</span><span>${it.lineTotal}</span></div>`)
@@ -980,7 +1013,14 @@ function printSaleReceipt(sale) {
 </html>`);
   win.document.close();
   win.focus();
-  setTimeout(() => { win.print(); }, 300);
+  setTimeout(() => {
+    try {
+      win.print();
+    } catch (e) {
+      if (onFail) onFail("print");
+    }
+  }, 300);
+  return true;
 }
 
 function validatePaymentMethod(pm, price) {
@@ -2146,43 +2186,61 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
 function SaleReceiptPreview({ sale, onClose }) {
   const pay = paymentLabel(sale);
   const isDelivery = sale.fulfillment === "delivery";
+  const [printError, setPrintError] = useState("");
+
+  const handlePrint = () => {
+    printSaleReceipt(sale, (reason) => {
+      setPrintError(reason === "popup" ? "التطبيق مش قادر يفتح شاشة الطباعة — تأكد إن الـpop-ups مسموحة" : "حصلت مشكلة أثناء إرسال الفاتورة للطابعة");
+      setTimeout(() => setPrintError(""), 4000);
+    });
+  };
+
   return (
-    <Modal title="معاينة الفاتورة" accent="#0EA5E9" onClose={onClose}>
-      <div className="bg-white text-black rounded-lg p-4 mb-4 text-sm" dir="rtl" style={{ fontFamily: "Tahoma, Arial, sans-serif" }}>
-        <h3 className="text-center font-bold text-base mb-1">FaAroon</h3>
-        <p className="text-center text-xs text-gray-500 mb-1">فاتورة كاشير رقم {sale.invoiceNumber ?? ""}</p>
-        {sale.customerName && <p className="text-center text-xs text-gray-500 mb-1">الزبون: {sale.customerName}</p>}
-        <div className="border-t border-dashed border-gray-300 my-2" />
-        {sale.items.map((it, i) => (
-          <div key={i} className="flex justify-between text-xs py-0.5">
-            <span>{it.productName} × {it.qty}</span>
-            <span>{it.lineTotal}</span>
+    <>
+      <Modal title="معاينة الفاتورة" accent="#0EA5E9" onClose={onClose}>
+        <div className="bg-white text-black rounded-lg p-4 mb-4 text-sm" dir="rtl" style={{ fontFamily: "Tahoma, Arial, sans-serif" }}>
+          <h3 className="text-center font-bold text-base mb-1">FaAroon</h3>
+          <p className="text-center text-xs text-gray-500 mb-1">فاتورة كاشير رقم {sale.invoiceNumber ?? ""}</p>
+          {sale.customerName && <p className="text-center text-xs text-gray-500 mb-1">الزبون: {sale.customerName}</p>}
+          <div className="border-t border-dashed border-gray-300 my-2" />
+          {sale.items.map((it, i) => (
+            <div key={i} className="flex justify-between text-xs py-0.5">
+              <span>{it.productName} × {it.qty}</span>
+              <span>{it.lineTotal}</span>
+            </div>
+          ))}
+          <div className="border-t border-dashed border-gray-300 my-2" />
+          <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{sale.total}</span></div>
+          {!isDelivery && (
+            <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
+          )}
+          {isDelivery && (
+            <>
+              <div className="border-t border-dashed border-gray-300 my-2" />
+              <p className="text-xs font-bold text-gray-700 mb-1">بيانات الدليفري</p>
+              <div className="flex justify-between text-xs text-gray-600"><span>المنطقة</span><span>{sale.deliveryArea}</span></div>
+              <div className="flex justify-between text-xs text-gray-600"><span>تليفون الزبون</span><span dir="ltr">{sale.customerPhone}</span></div>
+              {sale.dispatchLocation && (
+                <div className="flex justify-between text-xs text-gray-600"><span>مكان الخروج</span><span>{sale.dispatchLocation}</span></div>
+              )}
+            </>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handlePrint} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
+            <Icon name="Printer" size={16} /> طباعة
+          </button>
+          <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إغلاق</button>
+        </div>
+      </Modal>
+      {printError && (
+        <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+          <div className="bg-rose-950/90 border border-rose-800 rounded-xl px-4 py-2 toast-in text-xs text-rose-300 font-bold text-center">
+            {printError}
           </div>
-        ))}
-        <div className="border-t border-dashed border-gray-300 my-2" />
-        <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{sale.total}</span></div>
-        {!isDelivery && (
-          <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
-        )}
-        {isDelivery && (
-          <>
-            <div className="border-t border-dashed border-gray-300 my-2" />
-            <p className="text-xs font-bold text-gray-700 mb-1">بيانات الدليفري</p>
-            <div className="flex justify-between text-xs text-gray-600"><span>المنطقة</span><span>{sale.deliveryArea}</span></div>
-            <div className="flex justify-between text-xs text-gray-600"><span>تليفون الزبون</span><span dir="ltr">{sale.customerPhone}</span></div>
-            {sale.dispatchLocation && (
-              <div className="flex justify-between text-xs text-gray-600"><span>مكان الخروج</span><span>{sale.dispatchLocation}</span></div>
-            )}
-          </>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <button onClick={() => printSaleReceipt(sale)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
-          <Icon name="Printer" size={16} /> طباعة
-        </button>
-        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إغلاق</button>
-      </div>
-    </Modal>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -4025,26 +4083,44 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
 // ---------- Reports screen (admin only) ----------
 function OrderReceiptPreview({ order, onClose }) {
   const pay = paymentLabel(order);
+  const [printError, setPrintError] = useState("");
+
+  const handlePrint = () => {
+    printOrderReceipt(order, (reason) => {
+      setPrintError(reason === "popup" ? "التطبيق مش قادر يفتح شاشة الطباعة — تأكد إن الـpop-ups مسموحة" : "حصلت مشكلة أثناء إرسال الفاتورة للطابعة");
+      setTimeout(() => setPrintError(""), 4000);
+    });
+  };
+
   return (
-    <Modal title="معاينة الفاتورة" accent="#0EA5E9" onClose={onClose}>
-      <div className="bg-white text-black rounded-lg p-4 mb-4 text-sm" dir="rtl" style={{ fontFamily: "Tahoma, Arial, sans-serif" }}>
-        <h3 className="text-center font-bold text-base mb-1">FaAroon</h3>
-        <p className="text-center text-xs text-gray-500 mb-2">فاتورة أوردر</p>
-        <div className="border-t border-dashed border-gray-300 my-2" />
-        <div className="flex justify-between text-xs py-0.5"><span>المندوب</span><span>{order.repName}</span></div>
-        <div className="flex justify-between text-xs py-0.5"><span>المنطقة</span><span>{order.area}</span></div>
-        {order.dispatchLocation && <div className="flex justify-between text-xs py-0.5"><span>مكان الخروج</span><span>{order.dispatchLocation}</span></div>}
-        <div className="border-t border-dashed border-gray-300 my-2" />
-        <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{order.price}</span></div>
-        <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
-      </div>
-      <div className="flex gap-2">
-        <button onClick={() => printOrderReceipt(order)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
-          <Icon name="Printer" size={16} /> طباعة
-        </button>
-        <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إغلاق</button>
-      </div>
-    </Modal>
+    <>
+      <Modal title="معاينة الفاتورة" accent="#0EA5E9" onClose={onClose}>
+        <div className="bg-white text-black rounded-lg p-4 mb-4 text-sm" dir="rtl" style={{ fontFamily: "Tahoma, Arial, sans-serif" }}>
+          <h3 className="text-center font-bold text-base mb-1">FaAroon</h3>
+          <p className="text-center text-xs text-gray-500 mb-2">فاتورة أوردر</p>
+          <div className="border-t border-dashed border-gray-300 my-2" />
+          <div className="flex justify-between text-xs py-0.5"><span>المندوب</span><span>{order.repName}</span></div>
+          <div className="flex justify-between text-xs py-0.5"><span>المنطقة</span><span>{order.area}</span></div>
+          {order.dispatchLocation && <div className="flex justify-between text-xs py-0.5"><span>مكان الخروج</span><span>{order.dispatchLocation}</span></div>}
+          <div className="border-t border-dashed border-gray-300 my-2" />
+          <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{order.price}</span></div>
+          <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handlePrint} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
+            <Icon name="Printer" size={16} /> طباعة
+          </button>
+          <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إغلاق</button>
+        </div>
+      </Modal>
+      {printError && (
+        <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+          <div className="bg-rose-950/90 border border-rose-800 rounded-xl px-4 py-2 toast-in text-xs text-rose-300 font-bold text-center">
+            {printError}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -5277,17 +5353,48 @@ function App() {
       }
       restoreRefreshToken(savedRefresh);
 
-      const storedUsers = await usersStore.loadAll();
-      if (!storedUsers) {
-        // Refresh token was invalid/expired — session is gone, back to login.
+      let authFailedForReal = false;
+      try {
+        await ensureAuth();
+      } catch (e) {
+        if (!e.isNetworkError) authFailedForReal = true;
+        // else: couldn't reach the server at all — say nothing yet, the
+        // users-load fallback below decides what to do.
+      }
+
+      if (authFailedForReal) {
+        // The server was reachable and explicitly said this refresh token is
+        // no longer valid — the session really is over.
         clearSession();
         setBooting(false);
         return;
       }
-      let u = storedUsers;
-      if (!u.some((x) => x.role === "admin" || x.role === "developer")) {
-        u = [...u, DEFAULT_ADMIN];
-        usersStore.upsert(DEFAULT_ADMIN);
+
+      const storedUsers = await usersStore.loadAll();
+      let u;
+      if (storedUsers) {
+        u = storedUsers;
+        saveDataCache("users", storedUsers);
+        if (!u.some((x) => x.role === "admin" || x.role === "developer")) {
+          u = [...u, DEFAULT_ADMIN];
+          usersStore.upsert(DEFAULT_ADMIN);
+        }
+      } else {
+        // Couldn't load users this time (offline, or a transient error even
+        // though auth itself was fine) — fall back to whatever we last saw,
+        // same idea as the existing products/sales/categories cache. This
+        // never grants anyone new access: whoever is in this cached list
+        // still has to match the saved session id AND status === "approved"
+        // below, exactly like a fresh load would require.
+        const cachedUsers = loadDataCache("users");
+        if (!cachedUsers) {
+          // No cached users to fall back on at all — we genuinely can't
+          // authenticate anyone offline. Don't fabricate a session.
+          clearSession();
+          setBooting(false);
+          return;
+        }
+        u = cachedUsers;
       }
       setUsers(u);
 
@@ -5736,6 +5843,7 @@ function MyInvoicesScreen({ user, sales, setView }) {
   const [range, setRange] = useState("all"); // all | today | yesterday | week
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState(null);
+  const [printError, setPrintError] = useState("");
 
   const myInvoices = sales
     .filter((s) => s.employeeName === user.name)
@@ -5847,9 +5955,23 @@ function MyInvoicesScreen({ user, sales, setView }) {
             )}
           </div>
 
-          <button onClick={() => printSaleReceipt(selected)} className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2">
+          <button
+            onClick={() => printSaleReceipt(selected, (reason) => {
+              setPrintError(reason === "popup" ? "التطبيق مش قادر يفتح شاشة الطباعة — تأكد إن الـpop-ups مسموحة" : "حصلت مشكلة أثناء إرسال الفاتورة للطابعة");
+              setTimeout(() => setPrintError(""), 4000);
+            })}
+            className="btn-emerald w-full rounded-xl py-2.5 font-bold flex items-center justify-center gap-2"
+          >
             <Icon name="Printer" size={17} /> إعادة طباعة الفاتورة
           </button>
+
+          {printError && (
+            <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+              <div className="bg-rose-950/90 border border-rose-800 rounded-xl px-4 py-2 toast-in text-xs text-rose-300 font-bold text-center">
+                {printError}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
