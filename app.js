@@ -1906,9 +1906,11 @@ const EMPTY_CONFIRM_FORM = { paymentMethod: null, splitTransferMethod: null, cas
 // ---------- Cashier ----------
 // Pulls the first number out of a price-row label (e.g. "من 10 قطع" -> 10) so the
 // right quantity-based price can be picked automatically. No number = base price.
+// Runs through toEnglishDigits first so a label typed with Arabic-Indic numerals
+// (e.g. "من ١٢ قطعة") is still read correctly instead of falling back to 0.
 function parseQtyThreshold(label) {
   if (!label) return 0;
-  const m = String(label).match(/\d+/);
+  const m = toEnglishDigits(label).match(/\d+/);
   return m ? parseInt(m[0], 10) : 0;
 }
 
@@ -2181,27 +2183,37 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
         </button>
       ) : (
         <div
-          className="space-y-1.5 mb-3"
+          className="mb-3"
           onTouchStart={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
           onTouchEnd={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
           onMouseDown={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
           onMouseUp={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
         >
-          {rows.map((r, i) => {
-            const isActive = r === autoRow;
-            const qtyText = r.label && r.label.trim() ? r.label.trim() : "السعر الأساسي";
-            const color = activeTierObj?.color || "#fff";
-            return (
-              <div
-                key={i}
-                className="flex items-center justify-between rounded-xl px-3 py-2 border-2"
-                style={{ borderColor: color, background: isActive ? `${color}22` : "transparent", opacity: isActive ? 1 : 0.55 }}
-              >
-                <span className="text-xs font-semibold" style={{ color }}>{qtyText}</span>
-                <span className="font-bold tabular-nums text-base" style={{ color }}>{r.price} ج</span>
-              </div>
-            );
-          })}
+          {rows.length > 1 && (
+            <div className="text-center text-[11px] font-semibold rounded-lg py-1.5 mb-2" style={{ background: "rgba(139,92,246,0.14)", color: "#C4B5FD" }}>
+              السعر بيتغير تلقائيًا حسب الكمية
+            </div>
+          )}
+          <div className="space-y-1.5">
+            {rows.map((r, i) => {
+              const isActive = r === autoRow;
+              const qtyText = r.label && r.label.trim() ? r.label.trim() : "السعر الأساسي";
+              const color = activeTierObj?.color || "#fff";
+              return (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-xl px-3 py-2.5 border-2"
+                  style={{ borderColor: color, background: isActive ? `${color}22` : "transparent", opacity: isActive ? 1 : 0.55 }}
+                >
+                  <span className="flex items-center gap-2 text-xs font-semibold" style={{ color }}>
+                    <span className="w-3.5 h-3.5 rounded-full border-2 shrink-0" style={{ borderColor: color, background: isActive ? color : "transparent" }} />
+                    {qtyText}
+                  </span>
+                  <span className="font-bold tabular-nums text-base" style={{ color }}>{r.price} ج</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
