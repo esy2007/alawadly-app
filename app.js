@@ -1991,7 +1991,12 @@ function NewInvoiceTierModal({ customerNameOptions, customerTierMap, tierSetting
 
 // Handles both adding a new cart line and editing an existing one (pass existingItem).
 function NumPad({ title, initialValue, error, onConfirm, onClose }) {
-  const [value, setValue] = useState(initialValue || "");
+  // Always starts blank — even when editing an already-set value — so the first
+  // digit typed replaces the old number instead of appending onto it (typing "5"
+  // over an existing "12" becomes "5", not "125"). The old value stays visible,
+  // dimmed, until something is typed. Confirming with nothing typed is a no-op:
+  // it keeps the original value, same as Cancel.
+  const [value, setValue] = useState("");
   const KEYS = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "⌫"];
 
   const press = (k) => {
@@ -2004,9 +2009,12 @@ function NumPad({ title, initialValue, error, onConfirm, onClose }) {
     setValue((v) => v + k);
   };
 
+  const editing = value !== "";
+  const display = editing ? value : (initialValue || "0");
+
   return ReactDOM.createPortal(
     <Modal title={title} accent="#0EA5E9" onClose={onClose}>
-      <div className="text-center text-3xl font-bold text-white mb-4 tabular-nums py-3 border-b border-white/10 min-h-[3rem]">{value || "0"}</div>
+      <div className={`text-center text-3xl font-bold mb-4 tabular-nums py-3 border-b border-white/10 min-h-[3rem] ${editing ? "text-white" : "text-[#64748B]"}`}>{display}</div>
       <div className="grid grid-cols-3 gap-2 mb-4">
         {KEYS.map((k) => (
           <button key={k} onClick={() => press(k)} className="btn-ghost rounded-xl py-4 text-xl font-bold">
@@ -2016,7 +2024,7 @@ function NumPad({ title, initialValue, error, onConfirm, onClose }) {
       </div>
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <div className="flex gap-2">
-        <button onClick={() => onConfirm(value)} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold">تم</button>
+        <button onClick={() => onConfirm(editing ? value : (initialValue || "0"))} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold">تم</button>
         <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إلغاء</button>
       </div>
     </Modal>,
@@ -2041,6 +2049,22 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
   const qtyNum = parseNum(qty) || 1;
   const autoRow = pickBestRowForQty(rows, qtyNum);
   const displayPrice = priceOverridden ? manualPrice : String(autoRow?.price ?? "");
+  const lineTotal = (parseNum(displayPrice) || 0) * qtyNum;
+
+  // Images live in a separate collection (see productImagesStore in 01-helpers.jsx) —
+  // same lazy per-product fetch pattern already used on the Prices screen, just for
+  // this one product instead of a whole visible page of them.
+  const [fetchedImage, setFetchedImage] = useState(null);
+  useEffect(() => {
+    if (product.image) return;
+    let cancelled = false;
+    (async () => {
+      const fetched = await batchGetImages([product.id]);
+      if (!cancelled) setFetchedImage(fetched[product.id] || null);
+    })();
+    return () => { cancelled = true; };
+  }, [product.id]);
+  const displayImage = product.image || fetchedImage;
 
   const proceedAdd = (finalPrice, finalQty) => {
     const payload = { productId: product.id, productName: product.name, tierKey, priceNote: autoRow?.label, unitPrice: finalPrice, qty: finalQty, lineTotal: finalPrice * finalQty };
@@ -2101,6 +2125,10 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
 
   return (
     <Modal title={product.name} accent="#10B981" onClose={onClose}>
+      <div className="flex justify-center mb-4">
+        <ProductThumb product={{ image: displayImage }} />
+      </div>
+
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-xs text-[#94A3B8]">التصنيف</span>
         {!tierPickerOpen && userIsAdmin(user) && (
@@ -2152,17 +2180,46 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
           {manualPrice || "0"}
         </button>
       ) : (
-        <p
-          className="text-center text-lg font-bold mb-3 tabular-nums"
-          style={{ color: activeTiers(tierSettings).find((t) => t.id === tierKey)?.color || "#fff" }}
+        <div
+          className="space-y-1.5 mb-3"
           onTouchStart={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
           onTouchEnd={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
           onMouseDown={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
           onMouseUp={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
         >
-          {displayPrice}
-        </p>
+          {rows.map((r, i) => {
+            const isActive = r === autoRow;
+            const qtyText = r.label && r.label.trim() ? r.label.trim() : "السعر الأساسي";
+            const color = activeTierObj?.color || "#fff";
+            return (
+              <div
+                key={i}
+                className="flex items-center justify-between rounded-xl px-3 py-2 border-2"
+                style={{ borderColor: color, background: isActive ? `${color}22` : "transparent", opacity: isActive ? 1 : 0.55 }}
+              >
+                <span className="text-xs font-semibold" style={{ color }}>{qtyText}</span>
+                <span className="font-bold tabular-nums text-base" style={{ color }}>{r.price} ج</span>
+              </div>
+            );
+          })}
+        </div>
       )}
+
+      <div className="rounded-xl border border-white/10 bg-black/20 p-3 mb-4 space-y-1.5">
+        <div className="flex items-center justify-between text-xs text-[#94A3B8]">
+          <span>سعر الوحدة</span>
+          <span className="font-bold text-white tabular-nums">{displayPrice || 0} ج</span>
+        </div>
+        <div className="flex items-center justify-between text-xs text-[#94A3B8]">
+          <span>الكمية</span>
+          <span className="font-bold text-white tabular-nums">{qtyNum} قطعة</span>
+        </div>
+        <div className="border-t border-white/10 my-1" />
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-bold text-[#94A3B8]">الإجمالي</span>
+          <span className="text-lg font-bold text-emerald-400 tabular-nums">{lineTotal} ج</span>
+        </div>
+      </div>
 
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <button onClick={confirm} className="btn-emerald w-full rounded-xl py-2.5 font-bold">{existingItem ? "حفظ التعديل" : "إضافة للسلة"}</button>
