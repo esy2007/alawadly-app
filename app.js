@@ -2167,9 +2167,23 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
       )}
 
       <p className="text-xs text-[#94A3B8] mb-1.5">الكمية</p>
-      <button onClick={() => setNumPadTarget("qty")} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-4 text-center block font-bold tabular-nums">
-        {qty || "0"}
-      </button>
+      <div className="flex items-center gap-2 mb-4">
+        <button
+          onClick={() => setQty(String(Math.max(1, (parseNum(qty) || 1) - 1)))}
+          className="field-input w-11 h-11 shrink-0 rounded-xl text-xl font-bold flex items-center justify-center"
+        >
+          −
+        </button>
+        <button onClick={() => setNumPadTarget("qty")} className="field-input flex-1 rounded-xl px-3 py-2 text-sm text-center block font-bold tabular-nums">
+          {qty || "0"}
+        </button>
+        <button
+          onClick={() => setQty(String((parseNum(qty) || 0) + 1))}
+          className="field-input w-11 h-11 shrink-0 rounded-xl text-xl font-bold flex items-center justify-center"
+        >
+          +
+        </button>
+      </div>
 
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-xs text-[#94A3B8]">السعر</span>
@@ -2177,6 +2191,17 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
           <button onClick={() => { setManualPrice(displayPrice); setPriceOverridden(true); }} className="text-[11px] text-sky-400 font-semibold">تغيير</button>
         )}
       </div>
+
+      <div
+        className="text-center rounded-xl border-2 py-3 mb-3"
+        style={{ borderColor: activeTierObj?.color || "#fff", background: `${activeTierObj?.color || "#fff"}15` }}
+      >
+        <p className="text-[11px] text-[#94A3B8] mb-1">السعر الحالي حسب الكمية</p>
+        <p className="text-3xl font-bold tabular-nums" style={{ color: activeTierObj?.color || "#fff" }}>
+          {displayPrice || 0} <span className="text-lg">ج</span>
+        </p>
+      </div>
+
       {priceOverridden ? (
         <button onClick={() => setNumPadTarget("price")} className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center block font-bold tabular-nums">
           {manualPrice || "0"}
@@ -4873,7 +4898,7 @@ function ChangePasswordModal({ user, users, setUsers, onClose }) {
     const res = await updateOwnPassword(newPassword);
     setBusy(false);
     if (!res.ok) {
-      setError("حصلت مشكلة، جرب تاني");
+      setError(`حصلت مشكلة، جرب تاني (${res.detail || "?"})`);
       return;
     }
     onClose();
@@ -5647,7 +5672,7 @@ function App() {
     }
     if (!signIn.ok) {
       setAuthLoading(false);
-      setAuthError("الاسم أو كلمة المرور غلط");
+      setAuthError(`الاسم أو كلمة المرور غلط (${signIn.detail || "?"})`);
       return;
     }
     setAuthTokens(signIn.data);
