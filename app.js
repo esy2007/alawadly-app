@@ -1404,20 +1404,25 @@ function NotificationBell({ notifications, onMarkRead, onMarkAllRead }) {
 
 // ---------- Main menu ----------
 function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
+  const canPrices = userIsAdmin(user) || !!user.permissions?.manageProducts || !!user.permissions?.deleteProducts || !!user.permissions?.editPrices;
+  const canAdmin = userIsAdmin(user) || !!user.permissions?.manageUsers;
+  const canReports = userIsAdmin(user) || !!user.permissions?.viewReports;
+  const canStockAlerts = userIsAdmin(user) || !!user.permissions?.manageStockAlerts;
   const items = [
     { key: "cashier", label: "الكاشير", desc: "بيع منتجات وطباعة فاتورة", icon: "Wallet", enabled: true, accent: "#10B981" },
     { key: "myInvoices", label: "فواتيري", desc: "فواتيرك القديمة وإعادة الطباعة", icon: "Receipt", enabled: true, accent: "#0EA5E9" },
-    { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: userIsAdmin(user), accent: "#14B8A6" },
+    { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: canPrices, accent: "#14B8A6" },
     { key: "orders", label: "الطلبات", desc: "متابعة حالة أوردرات الدليفري", icon: "Package", enabled: true, accent: "#F97316" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
     { key: "attendance", label: "الحضور والسحب", desc: "سجل حضورك وسحوباتك", icon: "Clock", enabled: true, accent: "#06B6D4" },
-    { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: userIsAdmin(user), accent: "#0EA5E9" },
-    { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: userIsAdmin(user), accent: "#6366F1" },
-    { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: userIsAdmin(user), accent: "#F43F5E" },
-  ].filter((i) => (i.key !== "admin" && i.key !== "reports" && i.key !== "stock-alerts" && i.key !== "prices") || userIsAdmin(user));
+    { key: "admin", label: "إدارة المستخدمين", desc: "الموافقة على الطلبات والصلاحيات", icon: "Users", enabled: canAdmin, accent: "#0EA5E9" },
+    { key: "reports", label: "التقارير", desc: "الأوردرات المؤكدة والمبيعات", icon: "BarChart3", enabled: canReports, accent: "#6366F1" },
+    { key: "stock-alerts", label: "تنبيهات المخزون", desc: "منتجات خلصت أو مطلوبة", icon: "AlertCircle", enabled: canStockAlerts, accent: "#F43F5E" },
+  ].filter((i) => (i.key !== "admin" && i.key !== "reports" && i.key !== "stock-alerts" && i.key !== "prices") ||
+    (i.key === "admin" ? canAdmin : i.key === "reports" ? canReports : i.key === "stock-alerts" ? canStockAlerts : canPrices));
 
   const FAB_OPTIONS = [
-    { key: "prices", label: "منتج", icon: "Package", color: "#14B8A6", enabled: userIsAdmin(user) },
+    { key: "prices", label: "منتج", icon: "Package", color: "#14B8A6", enabled: userIsAdmin(user) || !!user.permissions?.manageProducts },
     { key: "orders", label: "الطلبات", icon: "Truck", color: "#F97316", enabled: true },
     { key: "cashier", label: "عميل", icon: "User", color: "#10B981", enabled: true },
     { key: "transfers", label: "تحويل", icon: "Send", color: "#A855F7", enabled: true },
@@ -2045,6 +2050,8 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
   const [numPadTarget, setNumPadTarget] = useState(null);
   const priceLongPressRef = React.useRef(null);
   const tierLongPressRef = React.useRef(null);
+  const canQuickTier = userIsAdmin(user) || !!user.permissions?.quickTierChange;
+  const canQuickPrice = userIsAdmin(user) || !!user.permissions?.quickPriceOverride;
   const activeTierObj = activeTiers(tierSettings).find((t) => t.id === tierKey);
 
   const rows = tierRows(product[tierKey]);
@@ -2141,7 +2148,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
 
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-[#94A3B8]">التصنيف</span>
-            {!tierPickerOpen && userIsAdmin(user) && (
+            {!tierPickerOpen && canQuickTier && (
               <button onClick={() => setTierPickerOpen(true)} className="text-[11px] text-sky-400 font-semibold">تغيير</button>
             )}
           </div>
@@ -2160,9 +2167,9 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
           ) : (
             <div
               className="flex gap-2 mb-4"
-              onTouchStart={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 2000); }}
+              onTouchStart={() => { if (!canQuickTier) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 2000); }}
               onTouchEnd={() => { if (tierLongPressRef.current) clearTimeout(tierLongPressRef.current); }}
-              onMouseDown={() => { if (!userIsAdmin(user)) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 2000); }}
+              onMouseDown={() => { if (!canQuickTier) tierLongPressRef.current = setTimeout(() => setTierPickerOpen(true), 2000); }}
               onMouseUp={() => { if (tierLongPressRef.current) clearTimeout(tierLongPressRef.current); }}
             >
               <TierColorButton
@@ -2176,7 +2183,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
 
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-[#94A3B8]">السعر</span>
-            {!priceOverridden && userIsAdmin(user) && (
+            {!priceOverridden && canQuickPrice && (
               <button onClick={() => { setManualPrice(displayPrice); setPriceOverridden(true); }} className="text-[11px] text-sky-400 font-semibold">تغيير</button>
             )}
           </div>
@@ -2188,9 +2195,9 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
           ) : (
             <div
               className="mb-3"
-              onTouchStart={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
+              onTouchStart={() => { if (!canQuickPrice) priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
               onTouchEnd={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
-              onMouseDown={() => { if (user?.role !== "admin") priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
+              onMouseDown={() => { if (!canQuickPrice) priceLongPressRef.current = setTimeout(() => { setManualPrice(displayPrice); setPriceOverridden(true); }, 2000); }}
               onMouseUp={() => { if (priceLongPressRef.current) clearTimeout(priceLongPressRef.current); }}
             >
               {rows.length > 1 && (
@@ -2395,7 +2402,7 @@ function CartThumb({ src }) {
   );
 }
 
-function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, setView }) {
+function CashierScreen({ user, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, categories, setView }) {
   const [invoices, setInvoices] = useState(() => (loadCashierInvoices()?.invoices) || []);
   const [activeId, setActiveId] = useState(() => {
     const saved = loadCashierInvoices();
@@ -2403,6 +2410,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   });
   const [showNewInvoicePicker, setShowNewInvoicePicker] = useState(false);
   const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const [activeCategory, setActiveCategory] = useState(null);
 
   useEffect(() => {
     saveCashierInvoices(invoices);
@@ -2464,9 +2472,12 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   });
   const topProducts = Object.entries(salesCountByName)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
     .map(([name]) => products.find((p) => p.name === name))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((p) => !activeCategory || p.categoryId === activeCategory)
+    .slice(0, 8);
+
+  const categoryProducts = activeCategory ? products.filter((p) => p.categoryId === activeCategory) : [];
 
   const normalizedQuery = normalizeArabic(query);
   const results = normalizedQuery ? products.filter((p) => normalizeArabic(p.name).includes(normalizedQuery)).slice(0, 12) : [];
@@ -2475,14 +2486,14 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const cartProductIds = activeInvoice ? activeInvoice.items.map((it) => it.productId) : [];
 
   useEffect(() => {
-    const visibleIds = [...results.map((p) => p.id), ...topProducts.map((p) => p.id), ...cartProductIds];
+    const visibleIds = [...results.map((p) => p.id), ...topProducts.map((p) => p.id), ...categoryProducts.map((p) => p.id), ...cartProductIds];
     const missing = [...new Set(visibleIds)].filter((id) => !(id in imageCache));
     if (missing.length === 0) return;
     batchGetImages(missing).then((map) => {
       setImageCache((c) => ({ ...c, ...Object.fromEntries(missing.map((id) => [id, map[id] || null])) }));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results.map((p) => p.id).join(","), topProducts.map((p) => p.id).join(","), cartProductIds.join(",")]);
+  }, [results.map((p) => p.id).join(","), topProducts.map((p) => p.id).join(","), categoryProducts.map((p) => p.id).join(","), cartProductIds.join(",")]);
 
   const createInvoice = async (tierKey, customerName) => {
     setCreatingInvoice(true);
@@ -2788,6 +2799,52 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
               <button onClick={() => { setPickerViaScan(true); setScanning(true); }} className="icon-btn rounded-xl px-3"><Icon name="ScanLine" size={18} /></button>
             </div>
 
+            {categories.length > 0 && (
+              <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
+                <button
+                  onClick={() => setActiveCategory(null)}
+                  className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold ${!activeCategory ? "btn-emerald" : "btn-ghost"}`}
+                >
+                  الكل
+                </button>
+                {categories.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => setActiveCategory(activeCategory === c.id ? null : c.id)}
+                    className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold ${activeCategory === c.id ? "btn-emerald" : "btn-ghost"}`}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {activeCategory && !query && (
+              <div className="mb-4">
+                <p className="text-xs text-[#94A3B8] mb-2">
+                  منتجات {categories.find((c) => c.id === activeCategory)?.name || ""} ({categoryProducts.length})
+                </p>
+                {categoryProducts.length === 0 ? (
+                  <p className="text-center text-[#64748B] py-6 text-sm">مفيش منتجات في التصنيف ده</p>
+                ) : (
+                  <div className="grid grid-cols-3 gap-2">
+                    {categoryProducts.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => { setPickerViaScan(false); setPickerProduct(p); }}
+                        className="panel rounded-xl p-2 flex flex-col items-center gap-1.5 text-center"
+                      >
+                        <span className="w-14 h-14 rounded-lg overflow-hidden bg-black/25 flex items-center justify-center shrink-0">
+                          {imageCache[p.id] ? <img src={imageCache[p.id]} alt="" className="w-full h-full object-cover" /> : <Icon name="Store" size={20} className="text-[#475569]" />}
+                        </span>
+                        <span className="text-[11px] font-bold text-white leading-tight line-clamp-2">{p.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {results.length > 0 && (
               <div className="space-y-2 mb-4">
                 {results.map((p) => (
@@ -2881,7 +2938,9 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
 
         {activeInvoice && !query && topProducts.length > 0 && (
           <div className="hidden lg:block">
-            <p className="text-xs text-[#94A3B8] mb-2">الأكتر مبيعًا</p>
+            <p className="text-xs text-[#94A3B8] mb-2">
+              {activeCategory ? `الأكتر مبيعًا في ${categories.find((c) => c.id === activeCategory)?.name || ""}` : "الأكتر مبيعًا"}
+            </p>
             <div className="space-y-2">
               {topProducts.map((p) => (
                 <button
@@ -3757,7 +3816,7 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
     .sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0));
 
   const mine = deliveries
-    .filter((s) => userIsAdmin(user) || s.employeeName === user.name)
+    .filter((s) => userIsAdmin(user) || !!user.permissions?.viewAllOrders || s.employeeName === user.name)
     .filter((s) => s.deliveryStatus !== "done" || (s.receivedAt && now - s.receivedAt < DAY_MS))
     .sort((a, b) => b.createdAt - a.createdAt);
 
@@ -4682,7 +4741,7 @@ function AttendanceCalendar({ employeeName, records, withdrawals, editable, bran
 }
 
 function AttendanceScreen({ user, users, attendance, setAttendance, withdrawals, setWithdrawals, branchSettings, setView }) {
-  const isAdmin = userIsAdmin(user);
+  const isAdmin = userIsAdmin(user) || !!user.permissions?.viewAllAttendance;
   const [selectedEmployee, setSelectedEmployee] = useState(isAdmin ? null : user.name);
   const [showWithdrawal, setShowWithdrawal] = useState(false);
 
@@ -5167,18 +5226,17 @@ function BranchSettingsModal({ branchSettings, setBranchSettings, onClose }) {
 function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset, setView }) {
   const isAdmin = userIsAdmin(user);
   const isDev = userIsDeveloper(user);
+  const canTierSettings = isAdmin || !!user.permissions?.manageTierSettings;
+  const canInvoiceNumbering = isAdmin || !!user.permissions?.manageInvoiceNumbering;
+  const canBranches = isAdmin || !!user.permissions?.manageBranches;
   const [openSection, setOpenSection] = useState(null);
 
   const items = [
     { key: "password", label: "تغيير كلمة السر", icon: "Lock" },
-    ...(isAdmin
-      ? [
-          ...(isDev ? [{ key: "dev", label: "أدوات الصيانة (Reset)", icon: "KeyRound" }] : []),
-          { key: "tiers", label: "ميزات إضافية", icon: "Settings" },
-          { key: "invoiceNumbering", label: "ترقيم الفواتير", icon: "Tag" },
-          { key: "branches", label: "فروع المحل", icon: "MapPin" },
-        ]
-      : []),
+    ...(isDev ? [{ key: "dev", label: "أدوات الصيانة (Reset)", icon: "KeyRound" }] : []),
+    ...(canTierSettings ? [{ key: "tiers", label: "ميزات إضافية", icon: "Settings" }] : []),
+    ...(canInvoiceNumbering ? [{ key: "invoiceNumbering", label: "ترقيم الفواتير", icon: "Tag" }] : []),
+    ...(canBranches ? [{ key: "branches", label: "فروع المحل", icon: "MapPin" }] : []),
   ];
 
   return (
@@ -5231,7 +5289,30 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
 function AdminScreen({ user, users, setUsers, setView }) {
   const pending = users.filter((u) => u.status === "pending");
   const approved = users.filter((u) => u.status === "approved" && u.role !== "admin" && u.role !== "developer");
+  const otherAdmins = users.filter((u) => (u.role === "admin" || u.role === "developer") && u.id !== user.id);
   const [justActed, setJustActed] = useState(null);
+
+  // Seniority: an admin who was never "promoted" (no promotedAt — the
+  // original/founding admin accounts) outranks everyone. Among promoted
+  // admins, whoever was promoted earlier outranks whoever was promoted
+  // later. A junior admin can never demote or remove a senior one.
+  const isSeniorTo = (me, target) => !me.promotedAt || (!!target.promotedAt && target.promotedAt > me.promotedAt);
+
+  const PERMISSIONS = [
+    { key: "manageProducts", label: "صلاحية إضافة المنتجات" },
+    { key: "deleteProducts", label: "صلاحية حذف المنتجات" },
+    { key: "editPrices", label: "صلاحية تعديل الأسعار" },
+    { key: "manageUsers", label: "إدارة المستخدمين (الموافقة على الطلبات وصلاحيات الموظفين)" },
+    { key: "viewReports", label: "الاطلاع على التقارير" },
+    { key: "manageStockAlerts", label: "تنبيهات المخزون" },
+    { key: "viewAllOrders", label: "رؤية كل الأوردرات (مش أوردراته بس)" },
+    { key: "viewAllAttendance", label: "رؤية حضور وسحب كل الموظفين" },
+    { key: "quickTierChange", label: "تغيير تصنيف الفاتورة في الكاشير مباشرة" },
+    { key: "quickPriceOverride", label: "تعديل السعر يدوي في الكاشير مباشرة" },
+    { key: "manageTierSettings", label: "ميزات إضافية (ألوان التصنيفات)" },
+    { key: "manageInvoiceNumbering", label: "ترقيم الفواتير" },
+    { key: "manageBranches", label: "فروع المحل" },
+  ];
 
   const decide = (u, status) => {
     const updated = { ...u, status };
@@ -5243,6 +5324,21 @@ function AdminScreen({ user, users, setUsers, setView }) {
 
   const togglePermission = (u, key) => {
     const updated = { ...u, permissions: { ...u.permissions, [key]: !u.permissions?.[key] } };
+    setUsers(users.map((x) => (x.id === u.id ? updated : x)));
+    usersStore.upsert(updated);
+  };
+
+  const promoteToAdmin = (u) => {
+    const allTrue = Object.fromEntries(PERMISSIONS.map((p) => [p.key, true]));
+    const updated = { ...u, role: "admin", promotedAt: Date.now(), promotedBy: user.id, permissions: allTrue };
+    setUsers(users.map((x) => (x.id === u.id ? updated : x)));
+    usersStore.upsert(updated);
+  };
+
+  const demoteToEmployee = (u) => {
+    if (!isSeniorTo(user, u)) return;
+    const noPerms = Object.fromEntries(PERMISSIONS.map((p) => [p.key, false]));
+    const updated = { ...u, role: "employee", promotedAt: null, promotedBy: null, permissions: noPerms };
     setUsers(users.map((x) => (x.id === u.id ? updated : x)));
     usersStore.upsert(updated);
   };
@@ -5368,21 +5464,46 @@ function AdminScreen({ user, users, setUsers, setView }) {
                   <button onClick={() => removeUser(u.id)} className="text-rose-400 hover:text-rose-300"><Icon name="Trash2" size={16} /></button>
                 </div>
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs text-[#CBD5E1]">
-                    <input type="checkbox" checked={!!u.permissions?.manageProducts} onChange={() => togglePermission(u, "manageProducts")} />
-                    صلاحية إضافة المنتجات
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-[#CBD5E1]">
-                    <input type="checkbox" checked={!!u.permissions?.deleteProducts} onChange={() => togglePermission(u, "deleteProducts")} />
-                    صلاحية حذف المنتجات
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-[#CBD5E1]">
-                    <input type="checkbox" checked={!!u.permissions?.editPrices} onChange={() => togglePermission(u, "editPrices")} />
-                    صلاحية تعديل الأسعار
-                  </label>
+                  {PERMISSIONS.map((p) => (
+                    <label key={p.key} className="flex items-center gap-2 text-xs text-[#CBD5E1]">
+                      <input type="checkbox" checked={!!u.permissions?.[p.key]} onChange={() => togglePermission(u, p.key)} />
+                      {p.label}
+                    </label>
+                  ))}
                 </div>
+                <button onClick={() => promoteToAdmin(u)} className="btn-ghost w-full rounded-xl py-2 text-xs font-bold mt-3">
+                  رفعه لأدمن كامل
+                </button>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section>
+          <h2 className="font-bold text-sm text-sky-400 mb-3">الأدمنز الآخرين ({otherAdmins.length})</h2>
+          {otherAdmins.length === 0 && <p className="text-sm text-[#64748B]">مفيش أدمنز تانيين</p>}
+          <div className="space-y-3">
+            {otherAdmins.map((u) => {
+              const senior = isSeniorTo(user, u);
+              return (
+                <div key={u.id} className="panel rounded-2xl p-4 flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-sm text-white">{u.name}</div>
+                    <div className="text-xs text-[#64748B]">{u.role === "developer" ? "مطوّر" : "أدمن"}{!u.promotedAt ? " · أصلي" : ""}</div>
+                  </div>
+                  {u.role !== "developer" && (
+                    senior ? (
+                      <div className="flex gap-2">
+                        <button onClick={() => demoteToEmployee(u)} className="btn-ghost rounded-lg px-3 py-1.5 text-xs font-bold">خفضه لموظف</button>
+                        <button onClick={() => removeUser(u.id)} className="text-rose-400 hover:text-rose-300"><Icon name="Trash2" size={16} /></button>
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-[#64748B]">أقدم منك — مينفعش تعدله</span>
+                    )
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -5973,13 +6094,13 @@ function App() {
       )}
       {screen === "orders" && currentUser && <OrdersScreen user={currentUser} sales={sales} setSales={setSales} users={users} branchSettings={branchSettings} setView={nav} />}
       {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
-      {screen === "reports" && currentUser && userIsAdmin(currentUser) && <ReportsScreen user={currentUser} orders={orders} sales={sales} branchSettings={branchSettings} setView={nav} />}
-      {screen === "stock-alerts" && currentUser && userIsAdmin(currentUser) && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
+      {screen === "reports" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.viewReports) && <ReportsScreen user={currentUser} orders={orders} sales={sales} branchSettings={branchSettings} setView={nav} />}
+      {screen === "stock-alerts" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageStockAlerts) && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} branchSettings={branchSettings} setView={nav} />}
       {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} branchSettings={branchSettings} setBranchSettings={setBranchSettings} onDevReset={performFullReset} setView={nav} />}
-      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} usingCachedProducts={usingCachedProducts} attendance={attendance} branchSettings={branchSettings} setView={nav} />}
+      {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} usingCachedProducts={usingCachedProducts} attendance={attendance} branchSettings={branchSettings} categories={categories} setView={nav} />}
       {screen === "myInvoices" && currentUser && <MyInvoicesScreen user={currentUser} sales={sales} setView={nav} />}
-      {screen === "admin" && currentUser && userIsAdmin(currentUser) && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
+      {screen === "admin" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageUsers) && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
 }
