@@ -778,7 +778,237 @@ function loadDataCache(key) {
   }
 }
 
+// Deletes the whole shared products-version document — used only by the
+// "wipe test data" reset below, so a fresh start doesn't carry stale version
+// numbers for products that no longer exist.
+async function resetProductVersions() {
+  try {
+    const token = await ensureAuth();
+    await fetch(PRODUCTS_VERSION_URL, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+  } catch (e) {
+    console.error("resetProductVersions failed", e);
+  }
+}
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+// ---------- IndexedDB cache (bigger, safer ceiling than localStorage — used
+// for data we expect to grow over time, like the products cache below) ----------
+const IDB_NAME = "faaroon_idb";
+const IDB_STORE = "cache";
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") { reject(new Error("indexedDB unavailable")); return; }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(key) {
+  try {
+    const db = await idbOpen();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result === undefined ? null : req.result);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function idbSet(key, value) {
+  try {
+    const db = await idbOpen();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------- Product version tracking (meta_col/products_version) ----------
+// One shared document holding { productId: versionNumber } for every product
+// that currently exists. A device compares this map against the versions it
+// already has cached locally: a higher number (or a brand-new id) means "go
+// fetch this product", and a local id that's gone missing from this map means
+// "that product was deleted, drop it from the local cache". This turns "is
+// anything new?" into a single document read instead of reading every
+// product every time.
+const PRODUCTS_VERSION_RESOURCE = `projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/meta_col/products_version`;
+const PRODUCTS_VERSION_URL = `${FIRESTORE_BASE}/meta_col/products_version`;
+
+async function fetchProductVersions() {
+  try {
+    const token = await ensureAuth();
+    const res = await fetch(PRODUCTS_VERSION_URL, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 404) return {}; // never written yet — nothing has been versioned
+    if (!res.ok) {
+      notifyStoreError("meta_col", await readErrorDetail(res));
+      return null;
+    }
+    const data = await res.json();
+    const fields = fromFirestoreFields(data.fields || {});
+    return fields.versions || {};
+  } catch (e) {
+    console.error("fetchProductVersions failed", e);
+    notifyStoreError("meta_col", e.message);
+    return null;
+  }
+}
+
+// Atomically bumps one product's version number by 1, using Firestore's
+// server-side increment so two devices editing different products at the
+// same instant can never stomp on each other's version numbers. Falls back
+// to creating the shared document directly the very first time it's used
+// (before it exists, a bare increment transform has nothing to act on).
+async function bumpProductVersion(productId) {
+  try {
+    const token = await ensureAuth();
+    const res = await fetch(`${FIRESTORE_BASE}:commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        writes: [{
+          transform: {
+            document: PRODUCTS_VERSION_RESOURCE,
+            fieldTransforms: [{ fieldPath: `versions.${productId}`, increment: { integerValue: "1" } }],
+          },
+        }],
+      }),
+    });
+    if (res.ok) return;
+    // First-ever bump (or any other failure): the transform above only works
+    // on a document that already exists. Fall back to a plain field update —
+    // scoped with updateMask to this one product's key only, so even if this
+    // ever fires for a reason other than "document missing", it can only
+    // ever touch this one product's counter, never wipe anyone else's.
+    const token2 = await ensureAuth();
+    const url = `${PRODUCTS_VERSION_URL}?updateMask.fieldPaths=${encodeURIComponent(`versions.${productId}`)}`;
+    await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token2}` },
+      body: JSON.stringify({ fields: toFirestoreFields({ versions: { [productId]: 1 } }) }),
+    });
+  } catch (e) {
+    console.error("bumpProductVersion failed", e);
+  }
+}
+
+// Removes one product's entry from the shared version map (used on delete) —
+// updateMask names only this one nested field, and since the request body
+// doesn't include it, Firestore deletes just that key without touching any
+// other product's version.
+async function dropProductVersion(productId) {
+  try {
+    const token = await ensureAuth();
+    const url = `${PRODUCTS_VERSION_URL}?updateMask.fieldPaths=${encodeURIComponent(`versions.${productId}`)}`;
+    await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ fields: {} }),
+    });
+  } catch (e) {
+    console.error("dropProductVersion failed", e);
+  }
+}
+
+// Fetches only the specific product documents listed (by id) — used to pull
+// just the products whose version changed, instead of the whole collection.
+async function batchGetProducts(ids) {
+  if (!ids.length) return [];
+  try {
+    const token = await ensureAuth();
+    const documents = ids.map((id) => `projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/products_col/${id}`);
+    const res = await fetch(`${FIRESTORE_BASE}:batchGet`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ documents }),
+    });
+    if (!res.ok) {
+      notifyStoreError("products_col", await readErrorDetail(res));
+      return null;
+    }
+    const data = await res.json();
+    return (Array.isArray(data) ? data : [])
+      .filter((r) => r.found)
+      .map((r) => fromFirestoreFields(r.found.fields));
+  } catch (e) {
+    console.error("batchGetProducts failed", e);
+    notifyStoreError("products_col", e.message);
+    return null;
+  }
+}
+
+// One-time bootstrap for the version map: writes version 1 for every product
+// currently in the collection. Used the first time syncProducts finds the
+// shared map empty — either this is a fresh install, or this feature just
+// shipped on top of a products collection that already had real products in
+// it (which had never been versioned before).
+async function seedProductVersions(products) {
+  try {
+    const token = await ensureAuth();
+    const versions = Object.fromEntries(products.map((p) => [p.id, 1]));
+    await fetch(PRODUCTS_VERSION_URL, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ fields: toFirestoreFields({ versions }) }),
+    });
+    return versions;
+  } catch (e) {
+    console.error("seedProductVersions failed", e);
+    return null;
+  }
+}
+
+// Brings the local products cache up to date using the version map above,
+// instead of re-reading the whole products collection every time. Returns
+// { products, versions } on success, or null if the version-check itself
+// failed (caller should fall back to whatever it already has cached).
+async function syncProducts(localProducts, localVersions) {
+  const remoteVersions = await fetchProductVersions();
+  if (!remoteVersions) return null;
+
+  // Bootstrap path: the shared map hasn't been seeded yet. Do one full,
+  // old-style load so nothing already in the catalog "disappears", then seed
+  // the map from it so every sync after this one can take the fast path.
+  if (Object.keys(remoteVersions).length === 0) {
+    const all = await productsStore.loadAll();
+    if (all === null) return null;
+    const seeded = all.length ? await seedProductVersions(all) : {};
+    return { products: all, versions: seeded || Object.fromEntries(all.map((p) => [p.id, 1])) };
+  }
+
+  const byId = Object.fromEntries(localProducts.map((p) => [p.id, p]));
+  const changedIds = Object.keys(remoteVersions).filter((id) => remoteVersions[id] !== localVersions[id]);
+  const deletedIds = Object.keys(localVersions).filter((id) => !(id in remoteVersions));
+  let fetched = [];
+  if (changedIds.length) {
+    // batchGet has no hard limit documented for this project's scale, but
+    // chunk defensively so one very large bulk edit can't fail as one giant request.
+    for (let i = 0; i < changedIds.length; i += 200) {
+      const chunk = await batchGetProducts(changedIds.slice(i, i + 200));
+      if (chunk === null) return null;
+      fetched = fetched.concat(chunk);
+    }
+  }
+  fetched.forEach((p) => { byId[p.id] = p; });
+  deletedIds.forEach((id) => { delete byId[id]; });
+  return { products: Object.values(byId), versions: remoteVersions };
+}
+
+
 
 function normalizeArabic(str) {
   return (str || "")
@@ -1034,15 +1264,6 @@ function validatePaymentMethod(pm, price) {
   }
   return null;
 }
-
-const DEFAULT_ADMIN = {
-  id: "admin-default",
-  name: "admin",
-  password: "admin123",
-  role: "admin",
-  status: "approved",
-  permissions: { manageProducts: true, deleteProducts: true, editPrices: true },
-};
 
 // "developer" is a role on top of "admin" — same full admin access, plus
 // access to the sensitive maintenance tools (full data reset, the
@@ -1684,6 +1905,24 @@ function BarcodeScannerModal({ onDetected, onClose }) {
   const instanceRef = React.useRef(null);
   const stoppedRef = React.useRef(false);
 
+  // Guarantees any camera stream this modal opened is fully released, even if
+  // the library's own stop() races with an in-flight start() or otherwise
+  // fails to tear down its injected <video> element cleanly.
+  const killAnyLeakedCamera = () => {
+    try {
+      document.querySelectorAll("video").forEach((v) => {
+        const stream = v.srcObject;
+        if (stream && typeof stream.getTracks === "function") {
+          stream.getTracks().forEach((t) => t.stop());
+        }
+        v.srcObject = null;
+        if (v.parentNode && !document.getElementById("barcode-reader-box")?.contains(v) && v.id !== "barcode-reader-box") {
+          v.parentNode.removeChild(v);
+        }
+      });
+    } catch {}
+  };
+
   useEffect(() => {
     if (typeof Html5Qrcode === "undefined") {
       setError("مكتبة قراءة الباركود لسه بتحمّل، جرب تاني بعد ثانية");
@@ -1697,13 +1936,14 @@ function BarcodeScannerModal({ onDetected, onClose }) {
       if (stoppedRef.current) return Promise.resolve();
       stoppedRef.current = true;
       try {
-        return qr.stop().catch(() => {});
+        return qr.stop().catch(() => {}).finally(killAnyLeakedCamera);
       } catch {
+        killAnyLeakedCamera();
         return Promise.resolve();
       }
     };
 
-    qr.start(
+    const startPromise = qr.start(
       { facingMode: "environment" },
       { fps: 10, qrbox: { width: 250, height: 140 } },
       (decodedText) => {
@@ -1713,7 +1953,10 @@ function BarcodeScannerModal({ onDetected, onClose }) {
     ).catch(() => setError("تعذر تشغيل الكاميرا — تأكد إنك سمحت للموقع بصلاحية الكاميرا"));
 
     return () => {
-      safeStop();
+      // Wait for start() to settle before stopping — calling stop() while
+      // start() is still initializing can fail silently and leave the
+      // camera stream (and its video element) running behind the scenes.
+      startPromise.finally(safeStop);
     };
   }, []);
 
@@ -3292,13 +3535,15 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   };
 
   const handleRefresh = async () => {
-    const fresh = await productsStore.loadAll();
-    if (fresh) {
-      setProducts(fresh);
-      saveDataCache("products", fresh);
+    const cached = await idbGet("products_cache");
+    const localVersions = cached?.versions || {};
+    const result = await syncProducts(products, localVersions);
+    if (result) {
+      setProducts(result.products);
       setUsingCachedProducts(false);
+      idbSet("products_cache", result);
     }
-    return !!fresh;
+    return !!result;
   };
 
   // One-time migration: older products still carry their photo embedded directly
@@ -3374,6 +3619,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
     if (isAdmin) updated.costPrice = draft.costPrice !== "" ? parseNum(draft.costPrice) : null;
     setProducts(products.map((x) => (x.id === p.id ? updated : x)));
     productsStore.upsert(stripImage(updated));
+    bumpProductVersion(p.id);
     logChange(p.id, p.name);
     setEditingId(null);
     setEditError("");
@@ -3383,6 +3629,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
     setProducts(products.filter((p) => p.id !== id));
     productsStore.remove(id);
     productImagesStore.remove(id);
+    dropProductVersion(id);
   };
 
   const pickExistingProductImage = async (p, file) => {
@@ -3439,6 +3686,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
       const updated = { ...existing, name: newProd.name.trim(), ...tierFields, image, barcodes: cleanBarcodes(newProd.barcodes), categoryId: newProd.categoryId, updatedAt: Date.now(), ...(isAdmin ? { costPrice } : {}) };
       setProducts(products.map((p) => (p.id === overwriteId ? updated : p)));
       productsStore.upsert(stripImage(updated));
+      bumpProductVersion(overwriteId);
       if (newProd.image) {
         setImageCache((c) => ({ ...c, [overwriteId]: newProd.image }));
         productImagesStore.upsert({ id: overwriteId, image: newProd.image });
@@ -3449,6 +3697,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
       const newProduct = { id: newId, name: newProd.name.trim(), ...tierFields, image: newProd.image || null, barcodes: cleanBarcodes(newProd.barcodes), costPrice, categoryId: newProd.categoryId, createdAt: Date.now(), updatedAt: Date.now() };
       setProducts([...products, newProduct]);
       productsStore.upsert(stripImage(newProduct));
+      bumpProductVersion(newId);
       if (newProd.image) {
         setImageCache((c) => ({ ...c, [newId]: newProd.image }));
         productImagesStore.upsert({ id: newId, image: newProd.image });
@@ -5292,11 +5541,19 @@ function AdminScreen({ user, users, setUsers, setView }) {
   const otherAdmins = users.filter((u) => (u.role === "admin" || u.role === "developer") && u.id !== user.id);
   const [justActed, setJustActed] = useState(null);
 
-  // Seniority: an admin who was never "promoted" (no promotedAt — the
-  // original/founding admin accounts) outranks everyone. Among promoted
+  // Seniority: an admin who was never "promoted" (no promotedAt — a
+  // founding admin account) outranks any promoted admin. Among promoted
   // admins, whoever was promoted earlier outranks whoever was promoted
   // later. A junior admin can never demote or remove a senior one.
-  const isSeniorTo = (me, target) => !me.promotedAt || (!!target.promotedAt && target.promotedAt > me.promotedAt);
+  // Two founding admins (both with no promotedAt) rank EQUAL and are
+  // mutually protected — neither can act on the other.
+  const isSeniorTo = (me, target) => {
+    if (me.id === target.id) return false;
+    if (!me.promotedAt && !target.promotedAt) return false; // both founding — equal rank
+    if (!me.promotedAt) return true; // me founding, target promoted — me senior
+    if (!target.promotedAt) return false; // target founding, me promoted — me junior
+    return me.promotedAt < target.promotedAt; // both promoted — earlier promotion wins
+  };
 
   const PERMISSIONS = [
     { key: "manageProducts", label: "صلاحية إضافة المنتجات" },
@@ -5344,6 +5601,10 @@ function AdminScreen({ user, users, setUsers, setView }) {
   };
 
   const removeUser = (id) => {
+    // Defense-in-depth: the UI already hides this action for a senior
+    // admin/developer target, but don't rely on that alone.
+    const target = users.find((x) => x.id === id);
+    if (target && (target.role === "admin" || target.role === "developer") && !isSeniorTo(user, target)) return;
     setUsers(users.filter((u) => u.id !== id));
     usersStore.remove(id);
   };
@@ -5570,7 +5831,7 @@ function AdminScreen({ user, users, setUsers, setView }) {
 // ---------- Root App ----------
 function App() {
   const [booting, setBooting] = useState(true);
-  const [users, setUsers] = useState([DEFAULT_ADMIN]);
+  const [users, setUsers] = useState([]);
   const [products, setProducts] = useState([]);
   const [changedToday, setChangedToday] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -5673,10 +5934,6 @@ function App() {
       if (storedUsers) {
         u = storedUsers;
         saveDataCache("users", storedUsers);
-        if (!u.some((x) => x.role === "admin" || x.role === "developer")) {
-          u = [...u, DEFAULT_ADMIN];
-          usersStore.upsert(DEFAULT_ADMIN);
-        }
       } else {
         // Couldn't load users this time (offline, or a transient error even
         // though auth itself was fine) — fall back to whatever we last saw,
@@ -5872,10 +6129,6 @@ function App() {
       return;
     }
     let u = storedUsers;
-    if (!u.some((x) => x.role === "admin" || x.role === "developer")) {
-      u = [...u, DEFAULT_ADMIN];
-      usersStore.upsert(DEFAULT_ADMIN);
-    }
     let found = u.find((x) => x.authUid === signIn.data.localId) || u.find((x) => namesMatch(x.name, name));
     // Self-heal: the FaAroon account can exist in Firebase Auth (from an
     // earlier attempt) without its matching Firestore record having been
@@ -5936,20 +6189,35 @@ function App() {
       return;
     }
     setAuthTokens(signUp.data);
+    // Bootstrap: on a truly empty system (no user records at all yet — the
+    // very first run), the first person to register becomes an approved
+    // admin immediately, since there's no admin who could ever approve
+    // them otherwise. Checked with a fresh read (not local state), so this
+    // can never mistakenly fire just because a device simply hasn't loaded
+    // the user list yet (e.g. it never had a saved session before).
+    const freshUsers = await usersStore.loadAll();
+    const isFreshInstall = Array.isArray(freshUsers) && freshUsers.length === 0;
     const newUser = {
       id: signUp.data.localId,
       name,
       authUid: signUp.data.localId,
       authEmail: email,
-      role: "employee",
-      status: "pending",
+      role: isFreshInstall ? "admin" : "employee",
+      status: isFreshInstall ? "approved" : "pending",
       permissions: { manageProducts: false, deleteProducts: false, editPrices: false },
     };
-    setUsers([...users, newUser]);
+    setUsers([...(freshUsers || users), newUser]);
     usersStore.upsert(newUser);
     setAuthLoading(false);
-    setPendingStatus("pending");
-    setScreen("pending");
+    if (isFreshInstall) {
+      setCurrentUser(newUser);
+      saveSession(newUser);
+      setLastSeen({ prices: Date.now(), reports: Date.now() });
+      setScreen("menu");
+    } else {
+      setPendingStatus("pending");
+      setScreen("pending");
+    }
   };
 
   const handleLogout = () => {
@@ -5966,18 +6234,19 @@ function App() {
   const ensureProductsLoaded = async () => {
     if (productsLoaded) return;
     setProductsLoading(true);
-    const data = await productsStore.loadAll();
-    if (data) {
-      setProducts(data);
+    const cached = await idbGet("products_cache"); // { products, versions } or null the first time
+    const localProducts = cached?.products || [];
+    const localVersions = cached?.versions || {};
+    const result = await syncProducts(localProducts, localVersions);
+    if (result) {
+      setProducts(result.products);
       setProductsLoaded(true);
-      saveDataCache("products", data);
-    } else {
-      const cached = loadDataCache("products");
-      if (cached) {
-        setProducts(cached);
-        setProductsLoaded(true);
-        setUsingCachedProducts(true);
-      }
+      setUsingCachedProducts(false);
+      idbSet("products_cache", result);
+    } else if (cached) {
+      setProducts(cached.products);
+      setProductsLoaded(true);
+      setUsingCachedProducts(true);
     }
     setProductsLoading(false);
   };
@@ -5996,6 +6265,8 @@ function App() {
     }
     setProducts([]);
     setProductsLoaded(false);
+    idbSet("products_cache", { products: [], versions: {} });
+    resetProductVersions();
     setOrders([]);
     setTransfers([]);
     setCategories([]);
