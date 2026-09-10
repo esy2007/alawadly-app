@@ -389,6 +389,143 @@ const withdrawalsStore = makeCollectionStore("withdrawals_col");
 
 const salesStore = makeCollectionStore("sales_col");
 
+// ---------- Sales/orders on-demand loading (sync redesign, part 2) ----------
+// sales_col only ever grows (a completed sale is never edited — see
+// AI_HANDOFF.md), so instead of reading the whole history every time, these
+// let a screen ask for just a specific date range, or just the small set of
+// delivery orders that are still "in flight" (not yet marked received).
+
+function firestoreFieldFilter(field, op, value) {
+  return { fieldFilter: { field: { fieldPath: field }, op, value: toFirestoreValue(value) } };
+}
+
+// Runs a structured query against sales_col. `filters` is a list of
+// firestoreFieldFilter(...) results, combined with AND. Returns the matching
+// sale objects, or null if the query itself failed (caller decides fallback).
+async function querySales(filters, limit) {
+  try {
+    const token = await ensureAuth();
+    const body = {
+      structuredQuery: {
+        from: [{ collectionId: "sales_col" }],
+        where: filters.length === 1 ? filters[0] : { compositeFilter: { op: "AND", filters } },
+        orderBy: [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }],
+        limit: limit || 1000,
+      },
+    };
+    const res = await fetch(`${FIRESTORE_BASE}:runQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      notifyStoreError("sales_col", await readErrorDetail(res));
+      return null;
+    }
+    const data = await res.json();
+    return (Array.isArray(data) ? data : [])
+      .filter((r) => r.document)
+      .map((r) => fromFirestoreFields(r.document.fields));
+  } catch (e) {
+    console.error("querySales failed", e);
+    notifyStoreError("sales_col", e.message);
+    return null;
+  }
+}
+
+// All sales created within [startTs, endTs] (inclusive) — for a user-picked
+// date range in فواتيري / التقارير. Capped at 2000 — a small 2-branch shop's
+// single day/week/month should never come close; if it ever does, that's a
+// sign the range picked was too wide, not a reason to silently truncate more.
+async function fetchSalesInRange(startTs, endTs) {
+  return querySales(
+    [
+      firestoreFieldFilter("createdAt", "GREATER_THAN_OR_EQUAL", startTs),
+      firestoreFieldFilter("createdAt", "LESS_THAN_OR_EQUAL", endTs),
+    ],
+    2000
+  );
+}
+
+// Delivery orders that might still change: anything not yet "done", plus
+// anything marked "done" in the last 24h (OrdersScreen still shows those
+// briefly so a receipt can be reprinted / mistake caught). This is normally
+// a handful of documents at any moment, never the whole sales history.
+async function fetchOpenDeliveryOrders() {
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const notDone = await querySales([
+    firestoreFieldFilter("fulfillment", "EQUAL", "delivery"),
+    firestoreFieldFilter("deliveryStatus", "NOT_EQUAL", "done"),
+  ]);
+  if (notDone === null) return null;
+  const recentlyDone = await querySales([
+    firestoreFieldFilter("fulfillment", "EQUAL", "delivery"),
+    firestoreFieldFilter("deliveryStatus", "EQUAL", "done"),
+    firestoreFieldFilter("receivedAt", "GREATER_THAN_OR_EQUAL", dayAgo),
+  ]);
+  if (recentlyDone === null) return notDone; // partial result still beats nothing
+  const byId = {};
+  [...notDone, ...recentlyDone].forEach((s) => { byId[s.id] = s; });
+  return Object.values(byId);
+}
+
+const returnsStore = makeCollectionStore("returns_col");
+
+// Same query pattern as querySales/fetchSalesInRange above, for returns_col.
+async function queryReturns(filters, orderByCreatedAt, limit) {
+  try {
+    const token = await ensureAuth();
+    const body = {
+      structuredQuery: {
+        from: [{ collectionId: "returns_col" }],
+        where: filters.length === 1 ? filters[0] : { compositeFilter: { op: "AND", filters } },
+        limit: limit || 1000,
+      },
+    };
+    if (orderByCreatedAt) body.structuredQuery.orderBy = [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }];
+    const res = await fetch(`${FIRESTORE_BASE}:runQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      notifyStoreError("returns_col", await readErrorDetail(res));
+      return null;
+    }
+    const data = await res.json();
+    return (Array.isArray(data) ? data : [])
+      .filter((r) => r.document)
+      .map((r) => fromFirestoreFields(r.document.fields));
+  } catch (e) {
+    console.error("queryReturns failed", e);
+    notifyStoreError("returns_col", e.message);
+    return null;
+  }
+}
+
+// Returns created within [startTs, endTs] — used by شاشة مرتجعات (search) and
+// التقارير (net-sales calc). Filter field === orderBy field (createdAt), same
+// shape as fetchSalesInRange, so this only needs Firestore's automatic
+// single-field index — no composite index to set up in the console.
+async function fetchReturnsInRange(startTs, endTs) {
+  return queryReturns(
+    [
+      firestoreFieldFilter("createdAt", "GREATER_THAN_OR_EQUAL", startTs),
+      firestoreFieldFilter("createdAt", "LESS_THAN_OR_EQUAL", endTs),
+    ],
+    true,
+    2000
+  );
+}
+
+// All returns already registered against one specific invoice — used to cap
+// how much of an item can still be returned. No orderBy here (order doesn't
+// matter for a sum), which also avoids needing a composite index for
+// originalSaleId + createdAt.
+async function fetchReturnsForSale(saleId) {
+  return queryReturns([firestoreFieldFilter("originalSaleId", "EQUAL", saleId)], false, 200);
+}
+
 const notificationsStore = makeCollectionStore("notifications_col");
 
 // Sends a persisted notification to a specific employee (by name) — shows up
@@ -555,6 +692,25 @@ function businessDayOf(ts) {
   const d = new Date(ts);
   if (d.getHours() < 3) d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// A "business day" runs 3:00am–2:59am (matches businessDayOf above), so
+// "today" doesn't flip over at midnight mid-shift. daysAgo=0 is today.
+function businessDayRange(daysAgo) {
+  const d = new Date();
+  if (d.getHours() < 3) d.setDate(d.getDate() - 1);
+  d.setDate(d.getDate() - daysAgo);
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 3, 0, 0, 0).getTime();
+  return { start, end: start + 24 * 60 * 60 * 1000 - 1 };
+}
+
+// "all"/wide ranges aren't literally unbounded — capped to the last ~90 days
+// so a date-range picker can never turn back into a full-history read.
+function rangeToTimestamps(range) {
+  if (range === "today") return businessDayRange(0);
+  if (range === "yesterday") return businessDayRange(1);
+  if (range === "week") return { start: businessDayRange(6).start, end: businessDayRange(0).end };
+  return { start: businessDayRange(89).start, end: businessDayRange(0).end };
 }
 
 let syncingOfflineQueue = false;
@@ -1161,10 +1317,10 @@ function printOrderReceipt(order, onFail) {
   <p class="center muted">فاتورة أوردر</p>
   <div class="line"></div>
   <div class="row"><span>المندوب</span><span>${escapeHtml(order.repName)}</span></div>
-  <div class="row"><span>المنطقة</span><span>${escapeHtml(order.area)}</span></div>
+  <div class="row"><span>المنطقة</span><span>${escapeHtml(order.deliveryArea)}</span></div>
   ${order.dispatchLocation ? `<div class="row"><span>مكان الخروج</span><span>${escapeHtml(order.dispatchLocation)}</span></div>` : ""}
   <div class="line"></div>
-  <div class="row total"><span>الإجمالي</span><span>${order.price}</span></div>
+  <div class="row total"><span>الإجمالي</span><span>${order.total}</span></div>
   <div class="row"><span>طريقة الدفع</span><span>${escapeHtml(pay.label)}</span></div>
   <div class="line"></div>
   ${order.notes ? `<p class="muted">ملاحظات: ${escapeHtml(order.notes)}</p>` : ""}
@@ -1632,6 +1788,7 @@ function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
   const items = [
     { key: "cashier", label: "الكاشير", desc: "بيع منتجات وطباعة فاتورة", icon: "Wallet", enabled: true, accent: "#10B981" },
     { key: "myInvoices", label: "فواتيري", desc: "فواتيرك القديمة وإعادة الطباعة", icon: "Receipt", enabled: true, accent: "#0EA5E9" },
+    { key: "returns", label: "مرتجعات", desc: "تسجيل مرتجع من فاتورة قديمة", icon: "RotateCcw", enabled: true, accent: "#F43F5E" },
     { key: "prices", label: "أسعار المحل", desc: "جملة · نص جملة · قطاعي", icon: "Store", enabled: canPrices, accent: "#14B8A6" },
     { key: "orders", label: "الطلبات", desc: "متابعة حالة أوردرات الدليفري", icon: "Package", enabled: true, accent: "#F97316" },
     { key: "transfers", label: "تحويلات", desc: "تسجيل تحويلات فلوس", icon: "Send", enabled: true, accent: "#A855F7" },
@@ -1754,9 +1911,11 @@ function DevResetModal({ onClose, onConfirmed }) {
 }
 
 function TierPriceEditor({ label, color, rows, setRows }) {
+  const [numPadRow, setNumPadRow] = useState(null);
   const addRow = () => setRows([...rows, { id: uid(), label: "", price: "" }]);
   const removeRow = (id) => setRows(rows.filter((r) => r.id !== id));
   const updateRow = (id, field, val) => setRows(rows.map((r) => (r.id === id ? { ...r, [field]: val } : r)));
+  const activeRow = rows.find((r) => r.id === numPadRow);
   return (
     <div className="price-chip !text-right">
       <div className="flex items-center justify-between mb-1.5">
@@ -1766,7 +1925,14 @@ function TierPriceEditor({ label, color, rows, setRows }) {
       <div className="space-y-1.5">
         {rows.map((r) => (
           <div key={r.id} className="flex gap-1.5 items-center">
-            <input value={r.price} onChange={(e) => updateRow(r.id, "price", e.target.value)} placeholder="السعر" className="field-input rounded-lg px-2 py-1.5 text-xs text-center w-20 shrink-0" style={{ color }} />
+            <button
+              type="button"
+              onClick={() => setNumPadRow(r.id)}
+              className="field-input rounded-lg px-2 py-1.5 text-xs text-center w-20 shrink-0 font-bold tabular-nums"
+              style={{ color: r.price ? color : "#64748B" }}
+            >
+              {r.price || "السعر"}
+            </button>
             <div className="flex-1">
               <span className="block text-[10px] text-[#94A3B8] mb-0.5">عدد القطع (اختياري)</span>
               <input value={r.label} onChange={(e) => updateRow(r.id, "label", e.target.value)} placeholder="مثال: من 10 قطع" className="field-input rounded-lg px-2 py-1.5 text-xs w-full" />
@@ -1777,6 +1943,14 @@ function TierPriceEditor({ label, color, rows, setRows }) {
           </div>
         ))}
       </div>
+      {activeRow && (
+        <NumPad
+          title="السعر"
+          initialValue={activeRow.price}
+          onConfirm={(val) => { updateRow(activeRow.id, "price", val); setNumPadRow(null); }}
+          onClose={() => setNumPadRow(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2122,6 +2296,7 @@ const PAYMENT_METHODS = [
 ];
 
 function PaymentMethodPicker({ value, onChange }) {
+  const [numPadField, setNumPadField] = useState(null); // "cash" | "transfer" | null
   return (
     <>
       <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">طريقة الدفع</span>
@@ -2140,9 +2315,21 @@ function PaymentMethodPicker({ value, onChange }) {
             <button onClick={() => onChange({ ...value, splitTransferMethod: "instapay" })} className={`toggle-pill flex-1 rounded-xl py-2 text-xs font-bold ${value.splitTransferMethod === "instapay" ? "active-sky" : ""}`}>انستاباي</button>
           </div>
           <div className="grid grid-cols-2 gap-2 mb-3">
-            <input value={value.cashAmount} onChange={(e) => onChange({ ...value, cashAmount: e.target.value })} className="field-input rounded-xl px-3 py-2 text-sm text-center" placeholder="المبلغ كاش" />
-            <input value={value.transferAmount} onChange={(e) => onChange({ ...value, transferAmount: e.target.value })} className="field-input rounded-xl px-3 py-2 text-sm text-center" placeholder="المبلغ تحويل" />
+            <button type="button" onClick={() => setNumPadField("cash")} className="field-input rounded-xl px-3 py-2 text-sm text-center" style={{ color: value.cashAmount ? undefined : "#64748B" }}>
+              {value.cashAmount || "المبلغ كاش"}
+            </button>
+            <button type="button" onClick={() => setNumPadField("transfer")} className="field-input rounded-xl px-3 py-2 text-sm text-center" style={{ color: value.transferAmount ? undefined : "#64748B" }}>
+              {value.transferAmount || "المبلغ تحويل"}
+            </button>
           </div>
+          {numPadField && (
+            <NumPad
+              title={numPadField === "cash" ? "المبلغ كاش" : "المبلغ تحويل"}
+              initialValue={numPadField === "cash" ? value.cashAmount : value.transferAmount}
+              onConfirm={(val) => { onChange({ ...value, [numPadField === "cash" ? "cashAmount" : "transferAmount"]: val }); setNumPadField(null); }}
+              onClose={() => setNumPadField(null)}
+            />
+          )}
         </>
       )}
     </>
@@ -2274,7 +2461,7 @@ function NumPad({ title, initialValue, error, onConfirm, onClose }) {
       </div>
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
       <div className="flex gap-2">
-        <button onClick={() => onConfirm(editing ? value : (initialValue || "0"))} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold">تم</button>
+        <button onClick={() => onConfirm(editing ? value : (initialValue || ""))} className="btn-emerald flex-1 rounded-xl py-2.5 font-bold">تم</button>
         <button onClick={onClose} className="btn-ghost flex-1 rounded-xl py-2.5 font-bold">إلغاء</button>
       </div>
     </Modal>,
@@ -2671,6 +2858,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   const checkoutBusyRef = React.useRef(false);
   const [fulfillment, setFulfillment] = useState("pickup"); // pickup | delivery
   const [deliveryForm, setDeliveryForm] = useState({ area: "", phone: "", dispatchLocation: "" });
+  const [phoneNumPadOpen, setPhoneNumPadOpen] = useState(false);
   const [deliveryError, setDeliveryError] = useState("");
   const [confirmForm, setConfirmForm] = useState(EMPTY_CONFIRM_FORM);
   const [confirmError, setConfirmError] = useState("");
@@ -2696,19 +2884,46 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
   };
   const [imageCache, setImageCache] = useState({});
   const [addedToast, setAddedToast] = useState("");
+  const [historicalSales, setHistoricalSales] = useState([]);
+
+  // Powers customer-name suggestions, remembered tier-per-customer, and the
+  // "top products" quick list below — these need a real look back at history,
+  // not just this session's sales, so fetch a bounded window (~90 days) once
+  // per screen visit instead of the old full-history read.
+  useEffect(() => {
+    (async () => {
+      const { start, end } = rangeToTimestamps("all");
+      const result = await fetchSalesInRange(start, end);
+      if (result) {
+        setHistoricalSales(result);
+        idbSet("cashier_history_cache", result);
+      } else {
+        const cached = await idbGet("cashier_history_cache");
+        if (cached) setHistoricalSales(cached);
+      }
+    })();
+  }, []);
   const [cancelPrompt, setCancelPrompt] = useState(null);
   const [undoItem, setUndoItem] = useState(null);
   const undoTimerRef = React.useRef(null);
 
   const activeInvoice = invoices.find((inv) => inv.id === activeId) || null;
-  const customerNameOptions = [...new Set(sales.map((s) => s.customerName).filter(Boolean))];
+  // Merge the ~90-day fetch above with anything already in the live `sales`
+  // state (e.g. a sale made just now this session), deduped by id.
+  const aggregateSales = (() => {
+    const byId = {};
+    historicalSales.forEach((s) => { byId[s.id] = s; });
+    sales.forEach((s) => { byId[s.id] = s; });
+    return Object.values(byId);
+  })();
+  const customerNameOptions = [...new Set(aggregateSales.map((s) => s.customerName).filter(Boolean))];
   const customerTierMap = {};
-  sales.forEach((s) => {
+  aggregateSales.forEach((s) => {
     if (s.customerName && s.tierKey) customerTierMap[s.customerName] = s.tierKey;
   });
 
   const salesCountByName = {};
-  sales.forEach((s) => {
+  aggregateSales.forEach((s) => {
     s.items.forEach((it) => {
       salesCountByName[it.productName] = (salesCountByName[it.productName] || 0) + it.qty;
     });
@@ -3339,7 +3554,23 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
             ) : (
               <>
                 <TextField label="المنطقة أو اسم المحل" icon="MapPin" value={deliveryForm.area} onChange={(e) => setDeliveryForm({ ...deliveryForm, area: e.target.value })} placeholder="مثال: المهندسين" />
-                <TextField label="رقم تليفون الزبون" icon="Smartphone" value={deliveryForm.phone} onChange={(e) => setDeliveryForm({ ...deliveryForm, phone: e.target.value })} placeholder="01xxxxxxxxx" />
+                <label className="block mb-4 text-right">
+                  <span className="block mb-1.5 text-sm font-medium text-[#94A3B8]">رقم تليفون الزبون</span>
+                  <div className="relative">
+                    <button type="button" onClick={() => setPhoneNumPadOpen(true)} className="field-input w-full rounded-xl px-4 py-2.5 pr-10 text-[15px] text-right" style={{ color: deliveryForm.phone ? undefined : "#64748B" }}>
+                      {deliveryForm.phone || "01xxxxxxxxx"}
+                    </button>
+                    <Icon name="Smartphone" size={18} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#64748B]" />
+                  </div>
+                </label>
+                {phoneNumPadOpen && (
+                  <NumPad
+                    title="رقم تليفون الزبون"
+                    initialValue={deliveryForm.phone}
+                    onConfirm={(val) => { setDeliveryForm({ ...deliveryForm, phone: val }); setPhoneNumPadOpen(false); }}
+                    onClose={() => setPhoneNumPadOpen(false)}
+                  />
+                )}
                 <div className="mb-4">
                   <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">مكان الخروج (اختياري دلوقتي)</span>
                   <div className="flex gap-2">
@@ -3416,6 +3647,9 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
   const [showMissingProduct, setShowMissingProduct] = useState(false);
   const [missingProductName, setMissingProductName] = useState("");
   const [scannerTarget, setScannerTarget] = useState(null);
+  const [deletePrompt, setDeletePrompt] = useState(null); // product pending delete confirmation
+  const [costPriceNumPadOpen, setCostPriceNumPadOpen] = useState(false);
+  const [newCostPriceNumPadOpen, setNewCostPriceNumPadOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const PAGE_SIZE = 30;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -3863,7 +4097,22 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
 
                 {editing && isAdmin && (
                   <div className="mt-2">
-                    <input value={draft.costPrice} onChange={(e) => setDraft({ ...draft, costPrice: e.target.value })} placeholder="سعر الشراء (يظهر لك بس)" className="field-input rounded-md px-2 py-1.5 text-xs text-center w-full" />
+                    <button
+                      type="button"
+                      onClick={() => setCostPriceNumPadOpen(true)}
+                      className="field-input rounded-md px-2 py-1.5 text-xs text-center w-full"
+                      style={{ color: draft.costPrice ? undefined : "#64748B" }}
+                    >
+                      {draft.costPrice || "سعر الشراء (يظهر لك بس)"}
+                    </button>
+                    {costPriceNumPadOpen && (
+                      <NumPad
+                        title="سعر الشراء"
+                        initialValue={draft.costPrice}
+                        onConfirm={(val) => { setDraft({ ...draft, costPrice: val }); setCostPriceNumPadOpen(false); }}
+                        onClose={() => setCostPriceNumPadOpen(false)}
+                      />
+                    )}
                   </div>
                 )}
 
@@ -3886,7 +4135,7 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
                           <button onClick={() => startEdit(p)} className="text-xs bg-amber-600/20 text-amber-400 px-3 py-1 rounded-lg font-semibold hover:bg-amber-600 hover:text-white transition-all flex items-center gap-1"><Icon name="Pencil" size={13} /> تعديل</button>
                         )}
                         {canDeleteProducts && (
-                          <button onClick={() => removeProduct(p.id)} className="text-xs bg-rose-600/20 text-rose-400 px-2 py-1 rounded-lg font-semibold hover:bg-rose-600 hover:text-white transition-all flex items-center gap-1"><Icon name="Trash2" size={13} /> حذف</button>
+                          <button onClick={() => setDeletePrompt(p)} className="text-xs bg-rose-600/20 text-rose-400 px-2 py-1 rounded-lg font-semibold hover:bg-rose-600 hover:text-white transition-all flex items-center gap-1"><Icon name="Trash2" size={13} /> حذف</button>
                         )}
                       </>
                     )}
@@ -3954,7 +4203,22 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
             {isAdmin && (
               <label className="block mb-3 text-right">
                 <span className="block mb-1.5 text-xs font-medium text-[#94A3B8] flex items-center gap-1"><Icon name="Wallet" size={12} /> سعر الشراء (يظهر لك بس، اختياري)</span>
-                <input value={newProd.costPrice} onChange={(e) => setNewProd({ ...newProd, costPrice: e.target.value })} className="field-input w-full rounded-xl px-3 py-2 text-sm text-center" placeholder="تكلفة الشراء" />
+                <button
+                  type="button"
+                  onClick={() => setNewCostPriceNumPadOpen(true)}
+                  className="field-input w-full rounded-xl px-3 py-2 text-sm text-center"
+                  style={{ color: newProd.costPrice ? undefined : "#64748B" }}
+                >
+                  {newProd.costPrice || "تكلفة الشراء"}
+                </button>
+                {newCostPriceNumPadOpen && (
+                  <NumPad
+                    title="سعر الشراء"
+                    initialValue={newProd.costPrice}
+                    onConfirm={(val) => { setNewProd({ ...newProd, costPrice: val }); setNewCostPriceNumPadOpen(false); }}
+                    onClose={() => setNewCostPriceNumPadOpen(false)}
+                  />
+                )}
               </label>
             )}
 
@@ -4036,6 +4300,15 @@ function PricesScreen({ user, products, setProducts, productsLoading, changedTod
             <div className="flex gap-2">
               <button onClick={() => { clearChangeLog(); setShowManualReset(false); }} className="btn-rose flex-1 rounded-xl py-2 text-sm font-bold">أيوه، صفّر العداد</button>
               <button onClick={() => setShowManualReset(false)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">لأ، رجّعني</button>
+            </div>
+          </Modal>
+        )}
+        {deletePrompt && (
+          <Modal title="حذف المنتج" accent="#EF4444" onClose={() => setDeletePrompt(null)}>
+            <p className="text-sm text-[#CBD5E1] mb-4">هيتمسح "{deletePrompt.name}" نهائيًا من كل الأجهزة، مش هتقدر ترجّعه. متأكد؟</p>
+            <div className="flex gap-2">
+              <button onClick={() => { removeProduct(deletePrompt.id); setDeletePrompt(null); }} className="btn-rose flex-1 rounded-xl py-2 text-sm font-bold">أيوه، امسحه</button>
+              <button onClick={() => setDeletePrompt(null)} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">لأ، رجّعني</button>
             </div>
           </Modal>
         )}
@@ -4168,7 +4441,15 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
 
   return (
     <div className="shop-root">
-      <PullToRefresh onRefresh={async () => { const fresh = await salesStore.loadAll(); if (fresh) setSales(fresh); }} />
+      <PullToRefresh onRefresh={async () => {
+        const fresh = await fetchOpenDeliveryOrders();
+        if (fresh) {
+          // Merge in (don't replace) — keeps any non-delivery sales already
+          // in state this session, only refreshes the delivery-orders part.
+          setSales((prev) => [...prev.filter((s) => s.fulfillment !== "delivery"), ...fresh]);
+          idbSet("open_orders_cache", fresh);
+        }
+      }} />
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="الطلبات" onNav={setView} />
 
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
@@ -4345,6 +4626,7 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
   const [showAdd, setShowAdd] = useState(false);
   const [personName, setPersonName] = useState("");
   const [amount, setAmount] = useState("");
+  const [amountNumPadOpen, setAmountNumPadOpen] = useState(false);
   const [error, setError] = useState("");
 
   const [confirmingTransfer, setConfirmingTransfer] = useState(null);
@@ -4464,7 +4746,22 @@ function TransfersScreen({ user, transfers, setTransfers, setView }) {
             </label>
             <label className="block mb-3 text-right">
               <span className="block mb-1.5 text-xs font-medium text-[#94A3B8]">المبلغ</span>
-              <input value={amount} onChange={(e) => setAmount(e.target.value)} className="field-input w-full rounded-xl px-4 py-2.5 text-sm text-center" placeholder="المبلغ" />
+              <button
+                type="button"
+                onClick={() => setAmountNumPadOpen(true)}
+                className="field-input w-full rounded-xl px-4 py-2.5 text-sm text-center"
+                style={{ color: amount ? undefined : "#64748B" }}
+              >
+                {amount || "المبلغ"}
+              </button>
+              {amountNumPadOpen && (
+                <NumPad
+                  title="المبلغ"
+                  initialValue={amount}
+                  onConfirm={(val) => { setAmount(val); setAmountNumPadOpen(false); }}
+                  onClose={() => setAmountNumPadOpen(false)}
+                />
+              )}
             </label>
             {error && <p className="text-xs text-rose-400 mb-3 flex items-center gap-1"><Icon name="AlertCircle" size={12} /> {error}</p>}
             <div className="flex gap-2">
@@ -4513,10 +4810,10 @@ function OrderReceiptPreview({ order, onClose }) {
           <p className="text-center text-xs text-gray-500 mb-2">فاتورة أوردر</p>
           <div className="border-t border-dashed border-gray-300 my-2" />
           <div className="flex justify-between text-xs py-0.5"><span>المندوب</span><span>{order.repName}</span></div>
-          <div className="flex justify-between text-xs py-0.5"><span>المنطقة</span><span>{order.area}</span></div>
+          <div className="flex justify-between text-xs py-0.5"><span>المنطقة</span><span>{order.deliveryArea}</span></div>
           {order.dispatchLocation && <div className="flex justify-between text-xs py-0.5"><span>مكان الخروج</span><span>{order.dispatchLocation}</span></div>}
           <div className="border-t border-dashed border-gray-300 my-2" />
-          <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{order.price}</span></div>
+          <div className="flex justify-between font-bold text-sm mb-1"><span>الإجمالي</span><span>{order.total}</span></div>
           <div className="flex justify-between text-xs text-gray-600"><span>طريقة الدفع</span><span>{pay.label}</span></div>
         </div>
         <div className="flex gap-2">
@@ -4537,16 +4834,68 @@ function OrderReceiptPreview({ order, onClose }) {
   );
 }
 
-function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
+function ReportsScreen({ user, sales, branchSettings, setView }) {
   const [filterType, setFilterType] = useState("all"); // all | orders | sales
   const [filterBranch, setFilterBranch] = useState("all");
   const [filterOpen, setFilterOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [previewOrder, setPreviewOrder] = useState(null);
   const [previewSale, setPreviewSale] = useState(null);
+  const [range, setRange] = useState("today"); // today | yesterday | week | all (capped ~90 days)
+  const [fetchedSales, setFetchedSales] = useState([]);
+  const [fetchedReturns, setFetchedReturns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
 
-  const paidOrders = orders.filter((o) => o.paid).sort((a, b) => b.createdAt - a.createdAt);
-  const sortedSales = [...sales].sort((a, b) => b.createdAt - a.createdAt);
+  const { start: rangeStart, end: rangeEnd } = rangeToTimestamps(range);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setOffline(false);
+    const cacheKey = `reports_range:${range}`;
+    const returnsCacheKey = `reports_returns_range:${range}`;
+    (async () => {
+      const [result, returnsResult] = await Promise.all([fetchSalesInRange(rangeStart, rangeEnd), fetchReturnsInRange(rangeStart, rangeEnd)]);
+      if (cancelled) return;
+      if (result) {
+        setFetchedSales(result);
+        idbSet(cacheKey, result);
+      } else {
+        const cached = await idbGet(cacheKey);
+        setFetchedSales(cached || []);
+        setOffline(true);
+      }
+      if (returnsResult) {
+        setFetchedReturns(returnsResult);
+        idbSet(returnsCacheKey, returnsResult);
+      } else {
+        const cachedReturns = await idbGet(returnsCacheKey);
+        setFetchedReturns(cachedReturns || []);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range]);
+
+  const returnsTotal = fetchedReturns.reduce((s, r) => s + (r.total || 0), 0);
+
+  // Merge the fetched range with anything already in the live `sales` state
+  // (e.g. a sale made just now this session) for the same window.
+  const rangeSales = (() => {
+    const byId = {};
+    fetchedSales.forEach((s) => { byId[s.id] = s; });
+    sales.forEach((s) => {
+      if ((s.createdAt || 0) >= rangeStart && (s.createdAt || 0) <= rangeEnd) byId[s.id] = s;
+    });
+    return Object.values(byId);
+  })();
+
+  const paidOrders = rangeSales.filter((s) => s.fulfillment === "delivery" && s.paid).sort((a, b) => b.createdAt - a.createdAt);
+  // Cashier ("sales") and delivery ("orders") both live in sales_col now — excluding
+  // delivery entries here keeps the two tabs mutually exclusive (no double-counting).
+  const sortedSales = rangeSales.filter((s) => s.fulfillment !== "delivery").sort((a, b) => b.createdAt - a.createdAt);
 
   const branchFilteredOrders = filterBranch === "all" ? paidOrders : paidOrders.filter((o) => o.dispatchLocation === filterBranch);
   const branchFilteredSales = filterBranch === "all" ? sortedSales : sortedSales.filter((s) => s.branchName === filterBranch || s.dispatchLocation === filterBranch);
@@ -4557,7 +4906,7 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
   const visibleOrders = showOrders ? branchFilteredOrders : [];
   const visibleSales = showSales ? branchFilteredSales : [];
 
-  const ordersTotal = visibleOrders.reduce((s, o) => s + o.price, 0);
+  const ordersTotal = visibleOrders.reduce((s, o) => s + o.total, 0);
   const salesTotal = visibleSales.reduce((s, sale) => s + sale.total, 0);
   const combinedTotal = ordersTotal + salesTotal;
   const combinedCount = visibleOrders.length + visibleSales.length;
@@ -4568,7 +4917,7 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
     ...visibleSales.map((s) => ({ kind: "sale", data: s, createdAt: s.createdAt })),
   ].sort((a, b) => b.createdAt - a.createdAt);
 
-  const activeFilterCount = (filterType !== "all" ? 1 : 0) + (filterBranch !== "all" ? 1 : 0);
+  const activeFilterCount = (filterType !== "all" ? 1 : 0) + (filterBranch !== "all" ? 1 : 0) + (range !== "today" ? 1 : 0);
 
   const renderOrderCard = (o) => {
     const pay = paymentLabel(o);
@@ -4578,16 +4927,16 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
         <div className="flex items-start justify-between mb-2">
           <div>
             <h3 className="font-bold text-base text-white flex items-center gap-1.5"><Icon name="Truck" size={15} className="text-[#94A3B8]" /> {o.repName}</h3>
-            <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.area}</p>
+            <p className="text-xs text-[#94A3B8] flex items-center gap-1 mt-0.5"><Icon name="MapPin" size={12} /> {o.deliveryArea}</p>
           </div>
-          <span className="font-bold text-lg text-sky-400 tabular-nums">{o.price}</span>
+          <span className="font-bold text-lg text-sky-400 tabular-nums">{o.total}</span>
         </div>
         <div className="flex items-center justify-between pt-2 border-t border-white/5">
           <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: `${pay.color}22`, color: pay.color }}>{pay.label}</span>
           <span className="text-xs font-bold text-amber-300">{o.employeeName} <span className="text-[#64748B] font-normal">· {new Date(o.createdAt).toLocaleDateString("ar-EG")}</span></span>
         </div>
-        {o.confirmedBy && (
-          <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.confirmedBy}</p>
+        {o.receivedBy && (
+          <p className="text-xs text-emerald-400 mt-2 font-bold flex items-center gap-1"><Icon name="CheckCircle2" size={12} /> استلم الفلوس: {o.receivedBy}</p>
         )}
 
         {expanded && (
@@ -4608,10 +4957,10 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
               <span className="text-[#94A3B8]">وقت الإنشاء: </span>
               {new Date(o.createdAt).toLocaleString("ar-EG")}
             </p>
-            {o.confirmedAt && (
+            {o.receivedAt && (
               <p className="text-[#CBD5E1]">
                 <span className="text-[#94A3B8]">وقت تأكيد الدفع: </span>
-                {new Date(o.confirmedAt).toLocaleString("ar-EG")}
+                {new Date(o.receivedAt).toLocaleString("ar-EG")}
               </p>
             )}
             {o.invoiceImage && (
@@ -4698,6 +5047,11 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
     <div className="shop-root">
       <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="التقارير" onNav={setView} />
       <div className="max-w-lg mx-auto px-4 py-2 fade-up">
+        {loading ? (
+          <p className="text-xs text-[#64748B] mb-3">بيحمّل...</p>
+        ) : offline ? (
+          <p className="text-xs text-amber-400 mb-3">آخر نسخة محفوظة — من غير إنترنت</p>
+        ) : null}
         <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between">
           <div>
             <p className="text-xs text-[#94A3B8]">
@@ -4706,8 +5060,11 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
             <p className="text-2xl font-bold text-emerald-400">{combinedCount}</p>
           </div>
           <div className="text-left">
-            <p className="text-xs text-[#94A3B8]">إجمالي المبيعات</p>
-            <p className="text-2xl font-bold text-sky-400 tabular-nums">{combinedTotal}</p>
+            <p className="text-xs text-[#94A3B8]">صافي المبيعات{returnsTotal > 0 ? " (بعد المرتجعات)" : ""}</p>
+            <p className="text-2xl font-bold text-sky-400 tabular-nums">{combinedTotal - returnsTotal}</p>
+            {returnsTotal > 0 && (
+              <p className="text-[11px] text-rose-400 tabular-nums">مرتجعات: −{returnsTotal} ج</p>
+            )}
           </div>
         </div>
 
@@ -4742,6 +5099,18 @@ function ReportsScreen({ user, orders, sales, branchSettings, setView }) {
 
       {filterOpen && (
         <Modal title="فلترة التقارير" accent="#0EA5E9" onClose={() => setFilterOpen(false)}>
+          <p className="text-xs text-[#94A3B8] mb-1.5">الفترة</p>
+          <div className="flex gap-2 mb-4 overflow-x-auto">
+            {[
+              { key: "today", label: "اليوم" },
+              { key: "yesterday", label: "أمس" },
+              { key: "week", label: "الأسبوع ده" },
+              { key: "all", label: "آخر 3 شهور" },
+            ].map((t) => (
+              <button key={t.key} onClick={() => setRange(t.key)} className={`shrink-0 rounded-xl px-3 py-2 text-xs font-bold ${range === t.key ? "btn-sky" : "btn-ghost"}`}>{t.label}</button>
+            ))}
+          </div>
+
           <p className="text-xs text-[#94A3B8] mb-1.5">نوع العملية</p>
           <div className="flex gap-2 mb-4">
             <button onClick={() => setFilterType("all")} className={`flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "all" ? "btn-sky" : "btn-ghost"}`}>الكل</button>
@@ -4833,6 +5202,7 @@ function DayEditModal({ dateStr, existing, branches, suggestedBranchId, onSave, 
 
 function WithdrawalEntryModal({ onSave, onClose }) {
   const [amount, setAmount] = useState("");
+  const [amountNumPadOpen, setAmountNumPadOpen] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
 
@@ -4848,7 +5218,22 @@ function WithdrawalEntryModal({ onSave, onClose }) {
   return (
     <Modal title="تسجيل سحب فلوس" accent="#FBBF24" onClose={onClose}>
       <p className="text-xs text-[#94A3B8] mb-1.5">المبلغ</p>
-      <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="المبلغ" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center" />
+      <button
+        type="button"
+        onClick={() => setAmountNumPadOpen(true)}
+        className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3 text-center"
+        style={{ color: amount ? undefined : "#64748B" }}
+      >
+        {amount || "المبلغ"}
+      </button>
+      {amountNumPadOpen && (
+        <NumPad
+          title="المبلغ"
+          initialValue={amount}
+          onConfirm={(val) => { setAmount(val); setAmountNumPadOpen(false); }}
+          onClose={() => setAmountNumPadOpen(false)}
+        />
+      )}
       <p className="text-xs text-[#94A3B8] mb-1.5">ملاحظة (اختياري، تبقى ليك بس)</p>
       <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="مثال: مصاريف مشوار" className="field-input w-full rounded-xl px-3 py-2 text-sm mb-3" />
       {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
@@ -5834,7 +6219,6 @@ function App() {
   const [users, setUsers] = useState([]);
   const [products, setProducts] = useState([]);
   const [changedToday, setChangedToday] = useState([]);
-  const [orders, setOrders] = useState([]);
   const [categories, setCategories] = useState([]);
   const [transfers, setTransfers] = useState([]);
   const [stockAlerts, setStockAlerts] = useState([]);
@@ -5956,7 +6340,9 @@ function App() {
       // Products carry each item's photo and can get large as the catalog grows,
       // so they're NOT fetched here — only when the Prices screen is opened (see nav()).
       setChangedToday((await changesStore.loadAll()) || []);
-      setOrders((await ordersStore.loadAll()) || []);
+      // orders_col is unused dead weight — nothing writes to it (delivery
+      // orders live in sales_col with fulfillment: "delivery" instead; see
+      // OrdersScreen and the reports fix). No longer loaded at boot.
       const loadedCategories = await categoriesStore.loadAll();
       if (loadedCategories) {
         setCategories(loadedCategories);
@@ -5968,12 +6354,12 @@ function App() {
       setStockAlerts((await stockAlertsStore.loadAll()) || []);
       setAttendance((await attendanceStore.loadAll()) || []);
       setWithdrawals((await withdrawalsStore.loadAll()) || []);
-      const loadedSales = await salesStore.loadAll();
-      if (loadedSales) {
-        setSales(loadedSales);
-        saveDataCache("sales", loadedSales);
+      const loadedOpenOrders = await fetchOpenDeliveryOrders();
+      if (loadedOpenOrders) {
+        setSales(loadedOpenOrders);
+        idbSet("open_orders_cache", loadedOpenOrders);
       } else {
-        setSales(loadDataCache("sales") || []);
+        setSales((await idbGet("open_orders_cache")) || []);
       }
       const loadedSettings = await settingsStore.loadAll();
       const savedTierSettings = loadedSettings && loadedSettings.find((s) => s.id === "tier_settings");
@@ -6021,10 +6407,12 @@ function App() {
     })();
   }, []);
 
-  // Keep the local cache fresh whenever sales change (e.g. right after checkout),
-  // so a completed sale isn't lost if the app closes before the next boot.
+  // Keep the local open-orders cache fresh whenever sales change (e.g. right
+  // after checkout or a delivery-status update), so it isn't lost if the app
+  // closes before the next boot. Only ever holds the small open-orders/
+  // this-session set now — see fetchOpenDeliveryOrders above.
   useEffect(() => {
-    if (sales.length) saveDataCache("sales", sales);
+    if (sales.length) idbSet("open_orders_cache", sales.filter((s) => s.fulfillment === "delivery"));
   }, [sales]);
 
   // Retry queued offline writes whenever the connection comes back, and
@@ -6267,7 +6655,6 @@ function App() {
     setProductsLoaded(false);
     idbSet("products_cache", { products: [], versions: {} });
     resetProductVersions();
-    setOrders([]);
     setTransfers([]);
     setCategories([]);
     setChangedToday([]);
@@ -6365,12 +6752,13 @@ function App() {
       )}
       {screen === "orders" && currentUser && <OrdersScreen user={currentUser} sales={sales} setSales={setSales} users={users} branchSettings={branchSettings} setView={nav} />}
       {screen === "transfers" && currentUser && <TransfersScreen user={currentUser} transfers={transfers} setTransfers={setTransfers} setView={nav} />}
-      {screen === "reports" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.viewReports) && <ReportsScreen user={currentUser} orders={orders} sales={sales} branchSettings={branchSettings} setView={nav} />}
+      {screen === "reports" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.viewReports) && <ReportsScreen user={currentUser} sales={sales} branchSettings={branchSettings} setView={nav} />}
       {screen === "stock-alerts" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageStockAlerts) && <StockAlertsScreen user={currentUser} stockAlerts={stockAlerts} setStockAlerts={setStockAlerts} setView={nav} />}
       {screen === "attendance" && currentUser && <AttendanceScreen user={currentUser} users={users} attendance={attendance} setAttendance={setAttendance} withdrawals={withdrawals} setWithdrawals={setWithdrawals} branchSettings={branchSettings} setView={nav} />}
       {screen === "settings" && currentUser && <SettingsScreen user={currentUser} users={users} setUsers={setUsers} tierSettings={tierSettings} setTierSettings={setTierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} branchSettings={branchSettings} setBranchSettings={setBranchSettings} onDevReset={performFullReset} setView={nav} />}
       {screen === "cashier" && currentUser && <CashierScreen user={currentUser} products={products} productsLoading={productsLoading} sales={sales} setSales={setSales} tierSettings={tierSettings} invoiceNumberSettings={invoiceNumberSettings} setInvoiceNumberSettings={setInvoiceNumberSettings} usingCachedProducts={usingCachedProducts} attendance={attendance} branchSettings={branchSettings} categories={categories} setView={nav} />}
       {screen === "myInvoices" && currentUser && <MyInvoicesScreen user={currentUser} sales={sales} setView={nav} />}
+      {screen === "returns" && currentUser && <ReturnsScreen user={currentUser} sales={sales} setView={nav} />}
       {screen === "admin" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageUsers) && <AdminScreen user={currentUser} users={users} setUsers={setUsers} setView={nav} />}
     </div>
   );
@@ -6394,29 +6782,55 @@ function invoiceDayLabel(ts) {
 
 function MyInvoicesScreen({ user, sales, setView }) {
   const [query, setQuery] = useState("");
-  const [range, setRange] = useState("all"); // all | today | yesterday | week
+  const [range, setRange] = useState("today"); // today | yesterday | week | all (capped ~90 days)
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState(null);
   const [printError, setPrintError] = useState("");
+  const [fetchedSales, setFetchedSales] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
 
-  const myInvoices = sales
-    .filter((s) => s.employeeName === user.name)
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const { start: rangeStart, end: rangeEnd } = rangeToTimestamps(range);
 
-  const today = businessDayOf(Date.now());
-  const yesterday = businessDayOf(Date.now() - 24 * 60 * 60 * 1000);
-  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setOffline(false);
+    const cacheKey = `my_invoices_range:${range}`;
+    (async () => {
+      const result = await fetchSalesInRange(rangeStart, rangeEnd);
+      if (cancelled) return;
+      if (result) {
+        setFetchedSales(result);
+        idbSet(cacheKey, result);
+      } else {
+        const cached = await idbGet(cacheKey);
+        setFetchedSales(cached || []);
+        setOffline(true);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range]);
 
-  const rangeFiltered = myInvoices.filter((s) => {
-    if (range === "today") return businessDayOf(s.createdAt) === today;
-    if (range === "yesterday") return businessDayOf(s.createdAt) === yesterday;
-    if (range === "week") return (s.createdAt || 0) >= weekAgo;
-    return true;
-  });
+  // Merge the fetched range with anything already in the live `sales` state
+  // (e.g. a sale made just now this session) that falls in the same window,
+  // so a brand-new invoice shows up immediately without waiting on a refetch.
+  const myInvoices = (() => {
+    const byId = {};
+    fetchedSales.forEach((s) => { byId[s.id] = s; });
+    sales.forEach((s) => {
+      if ((s.createdAt || 0) >= rangeStart && (s.createdAt || 0) <= rangeEnd) byId[s.id] = s;
+    });
+    return Object.values(byId)
+      .filter((s) => s.employeeName === user.name)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  })();
 
   const searched = query.trim()
-    ? rangeFiltered.filter((s) => String(s.invoiceNumber ?? "").includes(query.trim()))
-    : rangeFiltered;
+    ? myInvoices.filter((s) => String(s.invoiceNumber ?? "").includes(query.trim()))
+    : myInvoices;
 
   const totalPages = Math.max(1, Math.ceil(searched.length / MY_INVOICES_PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages - 1);
@@ -6429,10 +6843,10 @@ function MyInvoicesScreen({ user, sales, setView }) {
   };
 
   const RANGE_TABS = [
-    { key: "all", label: "الكل" },
     { key: "today", label: "اليوم" },
     { key: "yesterday", label: "أمس" },
     { key: "week", label: "هذا الأسبوع" },
+    { key: "all", label: "آخر 3 شهور" },
   ];
 
   if (selected) {
@@ -6562,7 +6976,10 @@ function MyInvoicesScreen({ user, sales, setView }) {
           ))}
         </div>
 
-        <p className="text-xs text-[#64748B] mb-3">إجمالي الفواتير: {searched.length}</p>
+        <p className="text-xs text-[#64748B] mb-3">
+          {loading ? "بيحمّل الفواتير..." : `إجمالي الفواتير: ${searched.length}`}
+          {offline && !loading && " (آخر نسخة محفوظة — من غير إنترنت)"}
+        </p>
 
         {searched.length === 0 ? (
           <div className="text-center py-14 text-[#64748B]">
@@ -6588,6 +7005,366 @@ function MyInvoicesScreen({ user, sales, setView }) {
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="font-bold text-emerald-400 tabular-nums">{s.total}</span>
                   <Icon name="Receipt" size={16} className="text-sky-400" />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-4 mt-4">
+            <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={pageSafe === 0} className="btn-ghost rounded-xl p-2 disabled:opacity-30">
+              <Icon name="ChevronLeft" size={16} style={{ transform: "rotate(180deg)" }} />
+            </button>
+            <span className="text-xs text-[#94A3B8]">{pageSafe + 1} من {totalPages}</span>
+            <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={pageSafe >= totalPages - 1} className="btn-ghost rounded-xl p-2 disabled:opacity-30">
+              <Icon name="ChevronLeft" size={16} />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// "مرتجعات" — register a return against a past invoice. Creates a new
+// returns_col record only; the original sale document is never touched (see
+// PROJECT_MEMORY.md — sync redesign part 3). No stock-quantity system exists
+// in this app (تنبيهات المخزون is manual employee reports, not a counted
+// inventory), so a return has no inventory-side effect — it's a financial
+// record only. Any logged-in user can register a return (owner's call).
+
+function returnDayLabel(ts) {
+  const day = businessDayOf(ts);
+  const today = businessDayOf(Date.now());
+  const yesterday = businessDayOf(Date.now() - 24 * 60 * 60 * 1000);
+  if (day === today) return "اليوم";
+  if (day === yesterday) return "أمس";
+  return new Date(ts).toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
+}
+
+const RETURNS_PAGE_SIZE = 6;
+
+function ReturnsScreen({ user, sales, setView }) {
+  // ---- Step 1: find the invoice ----
+  const [query, setQuery] = useState("");
+  const [range, setRange] = useState("today");
+  const [page, setPage] = useState(0);
+  const [fetchedSales, setFetchedSales] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
+
+  const { start: rangeStart, end: rangeEnd } = rangeToTimestamps(range);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setOffline(false);
+    const cacheKey = `returns_sales_range:${range}`;
+    (async () => {
+      const result = await fetchSalesInRange(rangeStart, rangeEnd);
+      if (cancelled) return;
+      if (result) {
+        setFetchedSales(result);
+        idbSet(cacheKey, result);
+      } else {
+        const cached = await idbGet(cacheKey);
+        setFetchedSales(cached || []);
+        setOffline(true);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range]);
+
+  // Any employee's invoice, not just the current user's (unlike فواتيري).
+  const inRange = (() => {
+    const byId = {};
+    fetchedSales.forEach((s) => { byId[s.id] = s; });
+    sales.forEach((s) => {
+      if ((s.createdAt || 0) >= rangeStart && (s.createdAt || 0) <= rangeEnd) byId[s.id] = s;
+    });
+    return Object.values(byId).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  })();
+
+  const q = query.trim();
+  const searched = q
+    ? inRange.filter((s) => String(s.invoiceNumber ?? "").includes(q) || (s.customerName || "").includes(q))
+    : inRange;
+
+  const totalPages = Math.max(1, Math.ceil(searched.length / RETURNS_PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages - 1);
+  const pageItems = searched.slice(pageSafe * RETURNS_PAGE_SIZE, pageSafe * RETURNS_PAGE_SIZE + RETURNS_PAGE_SIZE);
+
+  const RANGE_TABS = [
+    { key: "today", label: "اليوم" },
+    { key: "yesterday", label: "أمس" },
+    { key: "week", label: "هذا الأسبوع" },
+    { key: "all", label: "آخر 3 شهور" },
+  ];
+
+  // ---- Step 2: pick the invoice's items + qty to return ----
+  const [selected, setSelected] = useState(null); // the sale chosen
+  const [returnQtys, setReturnQtys] = useState({}); // itemIndex -> qty selected
+  const [alreadyReturned, setAlreadyReturned] = useState({}); // itemIndex -> qty already returned before
+  const [loadingExisting, setLoadingExisting] = useState(false);
+  const [note, setNote] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [successToast, setSuccessToast] = useState(false);
+
+  const openSale = (sale) => {
+    setSelected(sale);
+    setReturnQtys({});
+    setNote("");
+    setSubmitError("");
+    setLoadingExisting(true);
+    fetchReturnsForSale(sale.id).then((existing) => {
+      const already = {};
+      (existing || []).forEach((r) => {
+        (r.items || []).forEach((it) => {
+          if (typeof it.itemIndex === "number") already[it.itemIndex] = (already[it.itemIndex] || 0) + it.qty;
+        });
+      });
+      setAlreadyReturned(already);
+      setLoadingExisting(false);
+    });
+  };
+
+  const closeSale = () => {
+    setSelected(null);
+    setReturnQtys({});
+    setAlreadyReturned({});
+  };
+
+  const maxReturnable = (idx, item) => Math.max(0, item.qty - (alreadyReturned[idx] || 0));
+
+  const setQtyFor = (idx, item, val) => {
+    const max = maxReturnable(idx, item);
+    const clamped = Math.max(0, Math.min(max, val));
+    setReturnQtys((q2) => ({ ...q2, [idx]: clamped }));
+  };
+
+  const selectedItems = selected
+    ? selected.items
+        .map((it, idx) => ({ ...it, idx, returnQty: returnQtys[idx] || 0 }))
+        .filter((it) => it.returnQty > 0)
+    : [];
+  const returnTotal = selectedItems.reduce((s, it) => s + Math.round((it.unitPrice * it.returnQty + Number.EPSILON) * 100) / 100, 0);
+
+  const submitReturn = async () => {
+    if (submitting || selectedItems.length === 0) return;
+    setSubmitting(true);
+    setSubmitError("");
+    const rec = {
+      id: uid(),
+      originalSaleId: selected.id,
+      originalInvoiceNumber: selected.invoiceNumber,
+      originalEmployeeName: selected.employeeName,
+      employeeName: user.name,
+      customerName: selected.customerName || null,
+      branchName: selected.branchName || null,
+      items: selectedItems.map((it) => ({ itemIndex: it.idx, productName: it.productName, unitPrice: it.unitPrice, qty: it.returnQty, lineTotal: Math.round((it.unitPrice * it.returnQty + Number.EPSILON) * 100) / 100 })),
+      total: returnTotal,
+      note: note.trim() || null,
+      createdAt: Date.now(),
+    };
+    const ok = await returnsStore.upsert(rec);
+    setSubmitting(false);
+    if (!ok) {
+      // upsert() already queues it offline and will retry — still count this as accepted.
+    }
+    playBeep("success");
+    setConfirmOpen(false);
+    setSuccessToast(true);
+    setTimeout(() => setSuccessToast(false), 2500);
+    closeSale();
+    setQuery("");
+  };
+
+  // ---- Step 2 UI: item picker for the selected invoice ----
+  if (selected) {
+    return (
+      <div className="shop-root">
+        <Header user={user} onLogout={() => setView("logout")} onBack={closeSale} title={`مرتجع لفاتورة #${selected.invoiceNumber ?? ""}`} />
+        <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-28">
+          <div className="panel rounded-2xl p-4 mb-4 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] text-[#64748B]">الكاشير الأصلي</p>
+              <p className="text-sm font-bold text-white">{selected.employeeName}</p>
+            </div>
+            <div className="text-left">
+              <p className="text-[11px] text-[#64748B]">فاتورة #{selected.invoiceNumber}</p>
+              <p className="text-sm font-bold text-white">{returnDayLabel(selected.createdAt)}</p>
+            </div>
+          </div>
+
+          {loadingExisting ? (
+            <p className="text-center text-xs text-[#64748B] py-6">بيتحقق من مرتجعات سابقة على الفاتورة دي...</p>
+          ) : (
+            <div className="space-y-2 mb-4">
+              {selected.items.map((it, idx) => {
+                const max = maxReturnable(idx, it);
+                const val = returnQtys[idx] || 0;
+                return (
+                  <div key={idx} className={`panel rounded-xl p-3 ${max === 0 ? "opacity-40" : ""}`}>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="font-bold text-sm text-white truncate">{it.productName}</span>
+                      <span className="text-xs text-[#64748B] shrink-0 tabular-nums">{it.unitPrice} ج × {it.qty}</span>
+                    </div>
+                    {max === 0 ? (
+                      <p className="text-[11px] text-rose-400">اترجع بالكامل قبل كده</p>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setQtyFor(idx, it, val + 1)}
+                          disabled={val >= max}
+                          className="field-input w-9 h-9 shrink-0 rounded-lg text-lg font-bold flex items-center justify-center disabled:opacity-30"
+                        >
+                          +
+                        </button>
+                        <div className="field-input flex-1 rounded-lg py-1.5 text-sm text-center font-bold tabular-nums">{val}</div>
+                        <button
+                          onClick={() => setQtyFor(idx, it, val - 1)}
+                          disabled={val <= 0}
+                          className="field-input w-9 h-9 shrink-0 rounded-lg text-lg font-bold flex items-center justify-center disabled:opacity-30"
+                        >
+                          −
+                        </button>
+                        <span className="text-[11px] text-[#64748B] shrink-0 w-16 text-left">من {max}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <label className="block mb-4">
+            <span className="block mb-1.5 text-xs text-[#94A3B8]">ملاحظة / سبب الإرجاع (اختياري)</span>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              className="field-input w-full rounded-xl px-3 py-2 text-sm"
+              placeholder="مثلاً: المنتج فيه عيب"
+            />
+          </label>
+        </div>
+
+        {selectedItems.length > 0 && (
+          <div className="fixed bottom-0 inset-x-0 z-[80] p-4 bg-gradient-to-t from-[#0F172A] via-[#0F172A]/95 to-transparent">
+            <div className="max-w-lg mx-auto panel rounded-2xl p-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] text-[#64748B]">{selectedItems.length} صنف للإرجاع</p>
+                <p className="font-bold text-rose-400 text-lg tabular-nums">{returnTotal} ج</p>
+              </div>
+              <button onClick={() => setConfirmOpen(true)} className="btn-rose rounded-xl px-5 py-2.5 font-bold flex items-center gap-2">
+                <Icon name="RotateCcw" size={16} /> تسجيل المرتجع
+              </button>
+            </div>
+          </div>
+        )}
+
+        {confirmOpen && (
+          <Modal title="تأكيد المرتجع" accent="#EF4444" onClose={() => !submitting && setConfirmOpen(false)}>
+            <div className="space-y-1.5 mb-4">
+              {selectedItems.map((it) => (
+                <div key={it.idx} className="flex items-center justify-between text-sm">
+                  <span className="text-white">{it.productName} × {it.returnQty}</span>
+                  <span className="font-bold text-rose-400 tabular-nums">{it.unitPrice * it.returnQty} ج</span>
+                </div>
+              ))}
+              <div className="border-t border-white/10 my-2" />
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-white">الإجمالي</span>
+                <span className="font-bold text-rose-400 text-lg tabular-nums">{returnTotal} ج</span>
+              </div>
+            </div>
+            {submitError && <p className="text-xs text-rose-400 mb-3">{submitError}</p>}
+            <div className="flex gap-2">
+              <button onClick={submitReturn} disabled={submitting} className="btn-rose flex-1 rounded-xl py-2 text-sm font-bold disabled:opacity-50">
+                {submitting ? "بيسجل..." : "أيوه، سجّل المرتجع"}
+              </button>
+              <button onClick={() => setConfirmOpen(false)} disabled={submitting} className="btn-ghost flex-1 rounded-xl py-2 text-sm font-bold">لأ، رجّعني</button>
+            </div>
+          </Modal>
+        )}
+      </div>
+    );
+  }
+
+  // ---- Step 1 UI: find the invoice ----
+  return (
+    <div className="shop-root">
+      <Header user={user} onLogout={() => setView("logout")} onBack={() => setView("menu")} title="مرتجعات" onNav={setView} />
+      <div className="max-w-lg mx-auto px-4 py-2 fade-up pb-6">
+        <div className="relative mb-3">
+          <Icon name="Search" size={16} className="absolute top-1/2 -translate-y-1/2 right-3 text-[#64748B] pointer-events-none" />
+          <input
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setPage(0); }}
+            placeholder="بحث برقم الفاتورة أو اسم العميل"
+            className="field-input w-full rounded-xl pr-9 pl-9 py-2.5 text-sm"
+          />
+          {query && (
+            <button onClick={() => setQuery("")} className="absolute top-1/2 -translate-y-1/2 left-3 text-[#64748B]">
+              <Icon name="X" size={15} />
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-2 mb-3 overflow-x-auto">
+          {RANGE_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => { setRange(t.key); setPage(0); }}
+              className={`toggle-pill shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold ${range === t.key ? "active-sky" : ""}`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <p className="text-xs text-[#64748B] mb-3">
+          {loading ? "بيحمّل الفواتير..." : `إجمالي الفواتير: ${searched.length}`}
+          {offline && !loading && " (آخر نسخة محفوظة — من غير إنترنت)"}
+        </p>
+
+        {successToast && (
+          <div className="fixed bottom-4 inset-x-4 z-[95] flex justify-center">
+            <div className="bg-emerald-950/90 border border-emerald-800 rounded-xl px-4 py-2 toast-in text-xs text-emerald-300 font-bold text-center flex items-center gap-1.5">
+              <Icon name="CheckCircle2" size={14} /> اتسجل المرتجع بنجاح
+            </div>
+          </div>
+        )}
+
+        {searched.length === 0 ? (
+          <div className="text-center py-14 text-[#64748B]">
+            <Icon name="RotateCcw" size={32} className="mx-auto mb-2 text-[#334155]" />
+            <p className="text-sm">مفيش فواتير تطابق البحث</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {pageItems.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => openSale(s)}
+                className="panel rounded-xl p-3 w-full flex items-center justify-between gap-2 text-right transition-colors"
+              >
+                <div className="shrink-0">
+                  <div className="text-sm font-bold text-white tabular-nums">{new Date(s.createdAt).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}</div>
+                  <div className="text-[11px] text-[#64748B]">{returnDayLabel(s.createdAt)}</div>
+                </div>
+                <div className="flex-1 min-w-0 text-center">
+                  <div className="text-sm font-bold text-white">#{s.invoiceNumber}</div>
+                  <div className="text-[11px] text-[#64748B]">{s.employeeName} · {s.items.length} منتجات</div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="font-bold text-emerald-400 tabular-nums">{s.total}</span>
+                  <Icon name="RotateCcw" size={16} className="text-rose-400" />
                 </div>
               </button>
             ))}
