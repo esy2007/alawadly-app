@@ -84,8 +84,51 @@ async function readErrorDetail(res) {
   }
 }
 
+// ---------- Error codes (see ERROR_CODES.md for the full table) ----------
+// The banner the user sees only ever shows a short "LL-T" code — never raw
+// technical text — so when he reports a number, look it up in ERROR_CODES.md
+// instead of asking him to copy/paste anything.
+// LL = where it came from (which collection/operation), T = what kind of failure.
+const ERROR_LOCATIONS = {
+  "تسجيل الدخول (Auth)": "01",
+  users_col: "02",
+  products_col: "03",
+  product_images_col: "04",
+  categories_col: "05",
+  meta_col: "06",
+  changes_col: "07",
+  orders_col: "08",
+  transfers_col: "09",
+  stock_alerts_col: "10",
+  attendance_col: "11",
+  withdrawals_col: "12",
+  sales_col: "13",
+  notifications_col: "14",
+  settings_col: "15",
+  returns_col: "16",
+};
+
+// Classifies a detail string (from readErrorDetail, shaped "STATUS message",
+// or a plain thrown Error's .message with no leading status) into a single
+// digit. Never shown to the user — only used to build the short code.
+function classifyErrorType(detail) {
+  const m = /^(\d{3})\s([\s\S]*)$/.exec(detail || "");
+  if (!m) return "1"; // no leading HTTP status => a thrown/network exception
+  const status = m[1];
+  const rest = m[2];
+  if (status === "403") return "3";
+  if (status === "429") return "4";
+  if (status === "401") return "5";
+  if (status === "400" && /requires an index/i.test(rest)) return "2";
+  return "9";
+}
+
 function notifyStoreError(collectionName, detail) {
-  try { window.dispatchEvent(new CustomEvent("store-error", { detail: { collectionName, detail } })); } catch {}
+  const loc = ERROR_LOCATIONS[collectionName] || "00";
+  const type = classifyErrorType(detail);
+  const code = `${loc}-${type}`;
+  console.error(`[${code}] ${collectionName}:`, detail); // full detail still logged to console for debugging, just never shown in the UI
+  try { window.dispatchEvent(new CustomEvent("store-error", { detail: { collectionName, code } })); } catch {}
 }
 
 // ---------- Real per-employee sign-in (replaces the old blanket Anonymous
@@ -403,17 +446,17 @@ function firestoreFieldFilter(field, op, value) {
 // Runs a structured query against sales_col. `filters` is a list of
 // firestoreFieldFilter(...) results, combined with AND. Returns the matching
 // sale objects, or null if the query itself failed (caller decides fallback).
-async function querySales(filters, limit) {
+async function querySales(filters, limit, orderByField = "createdAt") {
   try {
     const token = await ensureAuth();
     const body = {
       structuredQuery: {
         from: [{ collectionId: "sales_col" }],
         where: filters.length === 1 ? filters[0] : { compositeFilter: { op: "AND", filters } },
-        orderBy: [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }],
         limit: limit || 1000,
       },
     };
+    if (orderByField) body.structuredQuery.orderBy = [{ field: { fieldPath: orderByField }, direction: "ASCENDING" }];
     const res = await fetch(`${FIRESTORE_BASE}:runQuery`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -454,20 +497,28 @@ async function fetchSalesInRange(startTs, endTs) {
 // a handful of documents at any moment, never the whole sales history.
 async function fetchOpenDeliveryOrders() {
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  const notDone = await querySales([
-    firestoreFieldFilter("fulfillment", "EQUAL", "delivery"),
-    firestoreFieldFilter("deliveryStatus", "NOT_EQUAL", "done"),
-  ]);
+  const notDone = await querySales(
+    [
+      firestoreFieldFilter("fulfillment", "EQUAL", "delivery"),
+      firestoreFieldFilter("deliveryStatus", "NOT_EQUAL", "done"),
+    ],
+    null,
+    null // no orderBy — see querySales's new 3rd param; keeps the index simple (fulfillment, deliveryStatus)
+  );
   if (notDone === null) return null;
-  const recentlyDone = await querySales([
-    firestoreFieldFilter("fulfillment", "EQUAL", "delivery"),
-    firestoreFieldFilter("deliveryStatus", "EQUAL", "done"),
-    firestoreFieldFilter("receivedAt", "GREATER_THAN_OR_EQUAL", dayAgo),
-  ]);
+  const recentlyDone = await querySales(
+    [
+      firestoreFieldFilter("fulfillment", "EQUAL", "delivery"),
+      firestoreFieldFilter("deliveryStatus", "EQUAL", "done"),
+      firestoreFieldFilter("receivedAt", "GREATER_THAN_OR_EQUAL", dayAgo),
+    ],
+    null,
+    null // same reasoning — index stays (fulfillment, deliveryStatus, receivedAt)
+  );
   if (recentlyDone === null) return notDone; // partial result still beats nothing
   const byId = {};
   [...notDone, ...recentlyDone].forEach((s) => { byId[s.id] = s; });
-  return Object.values(byId);
+  return Object.values(byId).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 }
 
 const returnsStore = makeCollectionStore("returns_col");
@@ -6240,7 +6291,6 @@ function App() {
   const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const remindedDateRef = React.useRef(null);
   const [syncError, setSyncError] = useState(null);
-  const [copiedSyncError, setCopiedSyncError] = useState(false);
 
   // App-wide ripple feedback on every button tap — one listener instead of
   // wiring each button individually.
@@ -6269,7 +6319,7 @@ function App() {
   useEffect(() => {
     const handler = (e) => {
       setSyncError(e.detail);
-      setTimeout(() => setSyncError(null), 20000);
+      setTimeout(() => setSyncError(null), 10000);
     };
     window.addEventListener("store-error", handler);
     return () => window.removeEventListener("store-error", handler);
@@ -6711,21 +6761,7 @@ function App() {
           <p className="text-rose-300 text-xs font-bold flex items-center justify-center gap-1.5">
             <Icon name="AlertCircle" size={14} /> تعذر الاتصال بقاعدة البيانات — {syncError.collectionName}
           </p>
-          {syncError.detail && (
-            <>
-              <p className="text-rose-400/80 text-[10px] mt-1 break-words max-h-[30vh] overflow-y-auto">{syncError.detail}</p>
-              <button
-                onClick={() => {
-                  const text = syncError.detail;
-                  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => setCopiedSyncError(true)).catch(() => {});
-                  setTimeout(() => setCopiedSyncError(false), 2000);
-                }}
-                className="mt-1.5 text-[10px] text-rose-300 underline"
-              >
-                {copiedSyncError ? "اتنسخ ✓" : "نسخ الرسالة كاملة"}
-              </button>
-            </>
-          )}
+          {syncError.code && <p className="text-rose-400/80 text-[10px] mt-1 tabular-nums">كود الخطأ: {syncError.code}</p>}
         </div>
       )}
       {reminder && currentUser && (
