@@ -76,7 +76,8 @@ let authPromise = null;
 async function readErrorDetail(res) {
   try {
     const data = await res.json();
-    const msg = data?.error?.message || data?.error_description || JSON.stringify(data).slice(0, 120);
+    const errObj = Array.isArray(data) ? data[0]?.error : data?.error;
+    const msg = errObj?.message || data?.error_description || JSON.stringify(data).slice(0, 500);
     return `${res.status} ${msg}`;
   } catch {
     return `${res.status} ${res.statusText || ""}`.trim();
@@ -6239,6 +6240,7 @@ function App() {
   const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const remindedDateRef = React.useRef(null);
   const [syncError, setSyncError] = useState(null);
+  const [copiedSyncError, setCopiedSyncError] = useState(false);
 
   // App-wide ripple feedback on every button tap — one listener instead of
   // wiring each button individually.
@@ -6267,7 +6269,7 @@ function App() {
   useEffect(() => {
     const handler = (e) => {
       setSyncError(e.detail);
-      setTimeout(() => setSyncError(null), 10000);
+      setTimeout(() => setSyncError(null), 20000);
     };
     window.addEventListener("store-error", handler);
     return () => window.removeEventListener("store-error", handler);
@@ -6709,7 +6711,21 @@ function App() {
           <p className="text-rose-300 text-xs font-bold flex items-center justify-center gap-1.5">
             <Icon name="AlertCircle" size={14} /> تعذر الاتصال بقاعدة البيانات — {syncError.collectionName}
           </p>
-          {syncError.detail && <p className="text-rose-400/80 text-[10px] mt-1 break-words">{syncError.detail}</p>}
+          {syncError.detail && (
+            <>
+              <p className="text-rose-400/80 text-[10px] mt-1 break-words max-h-[30vh] overflow-y-auto">{syncError.detail}</p>
+              <button
+                onClick={() => {
+                  const text = syncError.detail;
+                  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => setCopiedSyncError(true)).catch(() => {});
+                  setTimeout(() => setCopiedSyncError(false), 2000);
+                }}
+                className="mt-1.5 text-[10px] text-rose-300 underline"
+              >
+                {copiedSyncError ? "اتنسخ ✓" : "نسخ الرسالة كاملة"}
+              </button>
+            </>
+          )}
         </div>
       )}
       {reminder && currentUser && (
