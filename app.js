@@ -3265,28 +3265,35 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
           </div>
         )}
 
-        <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
-          {invoices.map((inv) => (
-            <div key={inv.id} className={`shrink-0 rounded-xl flex items-center ${activeId === inv.id ? "btn-sky" : "btn-ghost"}`}>
-              <button
-                onClick={() => { setActiveId(inv.id); playBeep("switch"); }}
-                onTouchStart={() => handleTabPressStart(inv.id)}
-                onTouchEnd={handleTabPressEnd}
-                onMouseDown={() => handleTabPressStart(inv.id)}
-                onMouseUp={handleTabPressEnd}
-                onMouseLeave={handleTabPressEnd}
-                className="pr-3 pl-1.5 py-2 text-xs font-bold"
-              >
-                {inv.customerName || inv.label}
-              </button>
-              <button onClick={() => setCancelPrompt(inv.id)} className="pl-2 pr-1.5 py-2 opacity-70">
-                <Icon name="X" size={13} />
-              </button>
-            </div>
-          ))}
-          <button onClick={() => setShowNewInvoicePicker(true)} className="shrink-0 icon-btn rounded-xl px-3 py-2 flex items-center gap-1">
-            <Icon name="Plus" size={15} /> فاتورة جديدة
-          </button>
+        <div className="flex items-center gap-2 mb-4">
+          <div className="flex gap-2 shrink-0">
+            <button onClick={() => setShowNewInvoicePicker(true)} className="shrink-0 icon-btn rounded-xl px-3 py-2 flex items-center gap-1">
+              <Icon name="Plus" size={15} /> فاتورة جديدة
+            </button>
+            <button onClick={() => setView("returns")} className="shrink-0 icon-btn rounded-xl px-3 py-2 flex items-center gap-1 text-rose-400">
+              <Icon name="RotateCcw" size={15} /> مرتجع
+            </button>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1 flex-1 justify-end">
+            {invoices.map((inv) => (
+              <div key={inv.id} className={`shrink-0 rounded-xl flex items-center ${activeId === inv.id ? "btn-sky" : "btn-ghost"}`}>
+                <button
+                  onClick={() => { setActiveId(inv.id); playBeep("switch"); }}
+                  onTouchStart={() => handleTabPressStart(inv.id)}
+                  onTouchEnd={handleTabPressEnd}
+                  onMouseDown={() => handleTabPressStart(inv.id)}
+                  onMouseUp={handleTabPressEnd}
+                  onMouseLeave={handleTabPressEnd}
+                  className="pr-3 pl-1.5 py-2 text-xs font-bold"
+                >
+                  {inv.customerName || inv.label}
+                </button>
+                <button onClick={() => setCancelPrompt(inv.id)} className="pl-2 pr-1.5 py-2 opacity-70">
+                  <Icon name="X" size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
 
         {!activeInvoice && (
