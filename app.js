@@ -127,8 +127,8 @@ function notifyStoreError(collectionName, detail) {
   const loc = ERROR_LOCATIONS[collectionName] || "00";
   const type = classifyErrorType(detail);
   const code = `${loc}-${type}`;
-  console.error(`[${code}] ${collectionName}:`, detail); // full detail still logged to console for debugging, just never shown in the UI
-  try { window.dispatchEvent(new CustomEvent("store-error", { detail: { collectionName, code } })); } catch {}
+  console.error(`[${code}] ${collectionName}:`, detail);
+  try { window.dispatchEvent(new CustomEvent("store-error", { detail: { collectionName, code, detail } })); } catch {}
 }
 
 // ---------- Real per-employee sign-in (replaces the old blanket Anonymous
@@ -497,13 +497,18 @@ async function fetchSalesInRange(startTs, endTs) {
 // a handful of documents at any moment, never the whole sales history.
 async function fetchOpenDeliveryOrders() {
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  // deliveryStatus only ever takes 3 values across the whole app (see
+  // 03-cashier.jsx / 05-orders.jsx): "prepared", "sent", "done". Listing the
+  // two non-final ones explicitly with IN — instead of `!= "done"` — makes
+  // this a plain equality-style filter for Firestore's indexing purposes, no
+  // special range/inequality index shape needed.
   const notDone = await querySales(
     [
       firestoreFieldFilter("fulfillment", "EQUAL", "delivery"),
-      firestoreFieldFilter("deliveryStatus", "NOT_EQUAL", "done"),
+      firestoreFieldFilter("deliveryStatus", "IN", ["prepared", "sent"]),
     ],
     null,
-    null // no orderBy — see querySales's new 3rd param; keeps the index simple (fulfillment, deliveryStatus)
+    null // no orderBy — see querySales's 3rd param; keeps the index simple (fulfillment, deliveryStatus)
   );
   if (notDone === null) return null;
   const recentlyDone = await querySales(
@@ -6291,6 +6296,7 @@ function App() {
   const [notifPermission, setNotifPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const remindedDateRef = React.useRef(null);
   const [syncError, setSyncError] = useState(null);
+  const [syncErrorCopied, setSyncErrorCopied] = useState(false);
 
   // App-wide ripple feedback on every button tap — one listener instead of
   // wiring each button individually.
@@ -6757,11 +6763,20 @@ function App() {
         </div>
       )}
       {syncError && (
-        <div className="fixed bottom-3 inset-x-3 z-[70] bg-rose-950/90 border border-rose-800 rounded-2xl p-3 modal-pop max-w-md mx-auto text-center">
+        <div
+          onClick={() => {
+            if (!syncError.detail || !navigator.clipboard?.writeText) return;
+            navigator.clipboard.writeText(syncError.detail).then(() => {
+              setSyncErrorCopied(true);
+              setTimeout(() => setSyncErrorCopied(false), 1500);
+            }).catch(() => {});
+          }}
+          className="fixed bottom-3 inset-x-3 z-[70] bg-rose-950/90 border border-rose-800 rounded-2xl p-3 modal-pop max-w-md mx-auto text-center"
+        >
           <p className="text-rose-300 text-xs font-bold flex items-center justify-center gap-1.5">
             <Icon name="AlertCircle" size={14} /> تعذر الاتصال بقاعدة البيانات — {syncError.collectionName}
           </p>
-          {syncError.code && <p className="text-rose-400/80 text-[10px] mt-1 tabular-nums">كود الخطأ: {syncError.code}</p>}
+          {syncError.code && <p className="text-rose-400/80 text-[10px] mt-1 tabular-nums">كود الخطأ: {syncError.code}{syncErrorCopied ? " — اتنسخت التفاصيل التقنية ✓" : ""}</p>}
         </div>
       )}
       {reminder && currentUser && (
