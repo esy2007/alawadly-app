@@ -17,12 +17,18 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
-<div id="root"></div>
-<script type="text/babel" src="app.js?v=202609122001"></script>
+<div id="root">
+  <div class="shop-root" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;min-height:100vh;min-height:100dvh;">
+    <img src="./icon-192.png" alt="" class="splash-logo-pulse" style="width:80px;height:80px;border-radius:1rem;box-shadow:0 10px 25px rgba(0,0,0,.35);" />
+    <h1 class="splash-fade-in" style="font-size:1.5rem;font-weight:800;letter-spacing:0.02em;margin:0;">FaAroon</h1>
+    <div class="splash-bar-track"><div class="splash-bar-fill"></div></div>
+    <p class="splash-fade-in" style="font-size:0.75rem;color:#64748B;margin:0;">...جارٍ التحميل</p>
+  </div>
+</div>
+<script src="app.js?v=202609130951"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", async () => {
