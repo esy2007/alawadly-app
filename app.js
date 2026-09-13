@@ -482,6 +482,79 @@ async function fetchReturnsInRange(startTs, endTs) {
 async function fetchReturnsForSale(saleId) {
   return queryReturns([firestoreFieldFilter("originalSaleId", "EQUAL", saleId)], false, 200);
 }
+async function fetchReturnTracking(saleId) {
+  try {
+    const token = await ensureAuth();
+    const res = await fetch(`${FIRESTORE_BASE}/return_tracking_col/${saleId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const doc = await res.json();
+      return { items: fromFirestoreFields(doc.fields).items || {}, updateTime: doc.updateTime };
+    }
+    if (res.status === 404) return { items: {}, updateTime: null };
+    notifyStoreError("return_tracking_col", await readErrorDetail(res));
+    return null;
+  } catch (e) {
+    notifyStoreError("return_tracking_col", e.message);
+    return null;
+  }
+}
+async function submitReturnAtomic(sale, selectedItems, returnRecord) {
+  const resourceRoot = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
+  const trackingPath = `return_tracking_col/${sale.id}`;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    let token;
+    try {
+      token = await ensureAuth();
+    } catch (e) {
+      return { ok: false, reason: "offline" };
+    }
+    const tracking = await fetchReturnTracking(sale.id);
+    if (tracking === null) return { ok: false, reason: "offline" };
+    for (const it of selectedItems) {
+      const already = tracking.items[String(it.idx)] || 0;
+      const original = sale.items[it.idx].qty;
+      if (already + it.returnQty > original) {
+        return { ok: false, reason: "overLimit", itemName: it.productName, maxLeft: Math.max(0, original - already) };
+      }
+    }
+    const updatedItems = { ...tracking.items };
+    selectedItems.forEach((it) => {
+      updatedItems[String(it.idx)] = (updatedItems[String(it.idx)] || 0) + it.returnQty;
+    });
+    const body = {
+      writes: [
+        {
+          update: {
+            name: `${resourceRoot}/${trackingPath}`,
+            fields: toFirestoreFields({ saleId: sale.id, items: updatedItems, updatedAt: Date.now() })
+          },
+          currentDocument: tracking.updateTime ? { updateTime: tracking.updateTime } : { exists: false }
+        },
+        {
+          update: {
+            name: `${resourceRoot}/returns_col/${returnRecord.id}`,
+            fields: toFirestoreFields(returnRecord)
+          },
+          currentDocument: { exists: false }
+        }
+      ]
+    };
+    try {
+      const commitRes = await fetch(`${FIRESTORE_BASE}:commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body)
+      });
+      if (commitRes.ok) return { ok: true };
+      await new Promise((r) => setTimeout(r, 80 + Math.random() * 160));
+    } catch (e) {
+      return { ok: false, reason: "offline" };
+    }
+  }
+  return { ok: false, reason: "conflict" };
+}
 const notificationsStore = makeCollectionStore("notifications_col");
 function sendNotification(forUser, message) {
   const notif = { id: uid(), forUser, message, read: false, createdAt: Date.now() };
@@ -4627,14 +4700,8 @@ function ReturnsScreen({ user, sales, setView }) {
     setNote("");
     setSubmitError("");
     setLoadingExisting(true);
-    fetchReturnsForSale(sale.id).then((existing) => {
-      const already = {};
-      (existing || []).forEach((r) => {
-        (r.items || []).forEach((it) => {
-          if (typeof it.itemIndex === "number") already[it.itemIndex] = (already[it.itemIndex] || 0) + it.qty;
-        });
-      });
-      setAlreadyReturned(already);
+    fetchReturnTracking(sale.id).then((tracking) => {
+      setAlreadyReturned(tracking ? tracking.items : {});
       setLoadingExisting(false);
     });
   };
@@ -4668,9 +4735,21 @@ function ReturnsScreen({ user, sales, setView }) {
       note: note.trim() || null,
       createdAt: Date.now()
     };
-    const ok = await returnsStore.upsert(rec);
+    const result = await submitReturnAtomic(selected, selectedItems, rec);
     setSubmitting(false);
-    if (!ok) {
+    if (!result.ok) {
+      if (result.reason === "overLimit") {
+        setSubmitError(`\u062D\u062F \u0641\u0627\u0636\u0644 \u0628\u0633 ${result.maxLeft} \u0645\u0646 "${result.itemName}" \u2014 \u062D\u0635\u0644 \u0639\u0644\u064A\u0647\u0627 \u0625\u0631\u062C\u0627\u0639 \u0645\u0646 \u062C\u0647\u0627\u0632/\u0645\u0648\u0638\u0641 \u062A\u0627\u0646\u064A \u0641\u064A \u0646\u0641\u0633 \u0627\u0644\u0644\u062D\u0638\u0629. \u062D\u062F\u0651\u062B \u0627\u0644\u0643\u0645\u064A\u0629 \u0648\u062C\u0631\u0628 \u062A\u0627\u0646\u064A.`);
+        fetchReturnTracking(selected.id).then((tracking) => {
+          if (tracking) setAlreadyReturned(tracking.items);
+        });
+      } else if (result.reason === "offline") {
+        setSubmitError("\u0645\u062D\u062A\u0627\u062C \u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0646\u062A \u0639\u0634\u0627\u0646 \u0646\u0633\u062C\u0644 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0628\u0623\u0645\u0627\u0646 \u2014 \u062C\u0631\u0628 \u062A\u0627\u0646\u064A \u0644\u0645\u0627 \u0627\u0644\u0646\u062A \u064A\u0631\u062C\u0639.");
+      } else {
+        setSubmitError("\u062D\u0635\u0644 \u062A\u0639\u0627\u0631\u0636 \u0648\u0642\u062A \u0627\u0644\u062D\u0641\u0638\u060C \u062C\u0631\u0628 \u062A\u0627\u0646\u064A.");
+      }
+      playBeep("error");
+      return;
     }
     playBeep("success");
     setConfirmOpen(false);
