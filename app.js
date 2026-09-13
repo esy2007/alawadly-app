@@ -441,6 +441,7 @@ async function fetchOpenDeliveryOrders() {
   return Object.values(byId).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 }
 const returnsStore = makeCollectionStore("returns_col");
+const returnTrackingStore = makeCollectionStore("return_tracking_col");
 async function queryReturns(filters, orderByCreatedAt, limit) {
   try {
     const token = await ensureAuth();
@@ -1504,6 +1505,31 @@ function DevResetModal({ onClose, onConfirmed }) {
       className: "field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
     }
   ), error && /* @__PURE__ */ React.createElement("p", { className: "text-rose-400 text-xs mb-3" }, error), /* @__PURE__ */ React.createElement("button", { disabled: busy, onClick: doReset, className: "btn-rose w-full rounded-xl py-2.5 font-bold" }, busy ? "\u0628\u064A\u062A\u0635\u0641\u0631..." : "\u062A\u0635\u0641\u064A\u0631 \u0643\u0644 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0646\u0647\u0627\u0626\u064A\u064B\u0627")));
+}
+function DevSalesResetModal({ onClose, onConfirmed }) {
+  const [confirmText, setConfirmText] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const doReset = async () => {
+    if (confirmText.trim() !== "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A") {
+      setError('\u0627\u0643\u062A\u0628 "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A" \u0628\u0627\u0644\u0638\u0628\u0637 \u0644\u0644\u062A\u0623\u0643\u064A\u062F');
+      return;
+    }
+    setError("");
+    setBusy(true);
+    await onConfirmed();
+    setBusy(false);
+    setDone(true);
+  };
+  return /* @__PURE__ */ React.createElement(Modal, { title: done ? "\u062A\u0645" : "\u062A\u0623\u0643\u064A\u062F \u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A", accent: "#F43F5E", onClose }, done ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-emerald-300 mb-4 leading-6" }, "\u0627\u062A\u0645\u0633\u062D\u062A \u0643\u0644 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0627\u0644\u0642\u062F\u064A\u0645\u0629 \u0628\u0646\u062C\u0627\u062D. \u0628\u0627\u0642\u064A \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062A\u0637\u0628\u064A\u0642 (\u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A\u060C \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646\u060C \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A) \u0641\u0636\u0644\u062A \u0632\u064A \u0645\u0627 \u0647\u064A."), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "btn-sky w-full rounded-xl py-2.5 font-bold" }, "\u062A\u0645\u0627\u0645")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-rose-300 mb-3 leading-6" }, "\u0627\u0644\u062E\u0637\u0648\u0629 \u062F\u064A \u0647\u062A\u0645\u0633\u062D ", /* @__PURE__ */ React.createElement("b", null, "\u0643\u0644 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A"), " \u0646\u0647\u0627\u0626\u064A\u064B\u0627 \u0648\u0645\u0641\u064A\u0634 \u0631\u062C\u0648\u0639 \u0641\u064A\u0647\u0627 \u2014 \u062F\u064A \u0628\u064A\u0627\u0646\u0627\u062A \u0645\u0628\u064A\u0639\u0627\u062A \u062D\u0642\u064A\u0642\u064A\u0629\u060C \u0645\u0634 \u0628\u064A\u0627\u0646\u0627\u062A \u062A\u062C\u0631\u0628\u0629. \u0628\u0627\u0642\u064A \u062D\u0627\u062C\u0627\u062A \u0627\u0644\u062A\u0637\u0628\u064A\u0642 (\u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A\u060C \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646\u060C \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A) \u0647\u062A\u0641\u0636\u0644 \u0632\u064A \u0645\u0627 \u0647\u064A."), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, '\u0627\u0643\u062A\u0628 "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A" \u0644\u0644\u062A\u0623\u0643\u064A\u062F'), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      value: confirmText,
+      onChange: (e) => setConfirmText(e.target.value),
+      className: "field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
+    }
+  ), error && /* @__PURE__ */ React.createElement("p", { className: "text-rose-400 text-xs mb-3" }, error), /* @__PURE__ */ React.createElement("button", { disabled: busy, onClick: doReset, className: "btn-rose w-full rounded-xl py-2.5 font-bold" }, busy ? "\u0628\u064A\u062A\u0645\u0633\u062D..." : "\u0627\u0645\u0633\u062D \u0643\u0644 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0646\u0647\u0627\u0626\u064A\u064B\u0627")));
 }
 function TierPriceEditor({ label, color, rows, setRows }) {
   const [numPadRow, setNumPadRow] = useState(null);
@@ -3374,7 +3400,6 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
       cancelled = true;
     };
   }, [range]);
-  const returnsTotal = fetchedReturns.reduce((s, r) => s + (r.total || 0), 0);
   const rangeSales = (() => {
     const byId = {};
     fetchedSales.forEach((s) => {
@@ -3397,6 +3422,9 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
   const salesTotal = visibleSales.reduce((s, sale) => s + sale.total, 0);
   const combinedTotal = ordersTotal + salesTotal;
   const combinedCount = visibleOrders.length + visibleSales.length;
+  const branchFilteredReturns = filterBranch === "all" ? fetchedReturns : fetchedReturns.filter((r) => r.branchName === filterBranch || r.dispatchLocation === filterBranch);
+  const visibleReturns = filterType === "all" ? branchFilteredReturns : filterType === "orders" ? branchFilteredReturns.filter((r) => r.fulfillment === "delivery") : branchFilteredReturns.filter((r) => r.fulfillment !== "delivery");
+  const returnsTotal = visibleReturns.reduce((s, r) => s + (r.total || 0), 0);
   const mergedItems = [
     ...visibleOrders.map((o) => ({ kind: "order", data: o, createdAt: o.createdAt })),
     ...visibleSales.map((s) => ({ kind: "sale", data: s, createdAt: s.createdAt }))
@@ -3849,7 +3877,7 @@ function BranchSettingsModal({ branchSettings, setBranchSettings, onClose }) {
     }
   ), branches.length > 1 && /* @__PURE__ */ React.createElement("button", { onClick: () => removeBranch(b.id), className: "text-rose-400 shrink-0" }, /* @__PURE__ */ React.createElement(Icon, { name: "Trash2", size: 16 })))), /* @__PURE__ */ React.createElement("button", { onClick: addBranch, className: "w-full text-xs text-sky-400 font-semibold flex items-center justify-center gap-1 py-2 mb-3" }, /* @__PURE__ */ React.createElement(Icon, { name: "Plus", size: 14 }), " \u0625\u0636\u0627\u0641\u0629 \u0641\u0631\u0639 \u062C\u062F\u064A\u062F"), error && /* @__PURE__ */ React.createElement("p", { className: "text-rose-400 text-xs mb-3" }, error), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: save, className: "btn-emerald flex-1 rounded-xl py-2 text-sm font-bold" }, "\u062D\u0641\u0638"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "btn-ghost flex-1 rounded-xl py-2 text-sm font-bold" }, "\u0625\u0644\u063A\u0627\u0621")));
 }
-function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset, setView }) {
+function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset, onDevSalesReset, setView }) {
   const isAdmin = userIsAdmin(user);
   const isDev = userIsDeveloper(user);
   const canTierSettings = isAdmin || !!user.permissions?.manageTierSettings;
@@ -3859,6 +3887,7 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
   const items = [
     { key: "password", label: "\u062A\u063A\u064A\u064A\u0631 \u0643\u0644\u0645\u0629 \u0627\u0644\u0633\u0631", icon: "Lock" },
     ...isDev ? [{ key: "dev", label: "\u0623\u062F\u0648\u0627\u062A \u0627\u0644\u0635\u064A\u0627\u0646\u0629 (Reset)", icon: "KeyRound" }] : [],
+    ...isDev ? [{ key: "devSales", label: "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0627\u0644\u0642\u062F\u064A\u0645\u0629", icon: "RotateCcw" }] : [],
     ...canTierSettings ? [{ key: "tiers", label: "\u0645\u064A\u0632\u0627\u062A \u0625\u0636\u0627\u0641\u064A\u0629", icon: "Settings" }] : [],
     ...canInvoiceNumbering ? [{ key: "invoiceNumbering", label: "\u062A\u0631\u0642\u064A\u0645 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631", icon: "Tag" }] : [],
     ...canBranches ? [{ key: "branches", label: "\u0641\u0631\u0648\u0639 \u0627\u0644\u0645\u062D\u0644", icon: "MapPin" }] : []
@@ -3881,7 +3910,7 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
     },
     /* @__PURE__ */ React.createElement(Icon, { name: "LogOut", size: 16, className: "text-rose-400" }),
     /* @__PURE__ */ React.createElement("span", { className: "font-bold text-sm text-rose-400" }, "\u062A\u0633\u062C\u064A\u0644 \u062E\u0631\u0648\u062C")
-  )), openSection === "password" && /* @__PURE__ */ React.createElement(ChangePasswordModal, { user, users, setUsers, onClose: () => setOpenSection(null) }), openSection === "dev" && /* @__PURE__ */ React.createElement(DevResetModal, { onConfirmed: onDevReset, onClose: () => setOpenSection(null) }), openSection === "tiers" && /* @__PURE__ */ React.createElement(TierSettingsModal, { tierSettings, setTierSettings, onClose: () => setOpenSection(null) }), openSection === "invoiceNumbering" && /* @__PURE__ */ React.createElement(InvoiceNumberSettingsModal, { invoiceNumberSettings, setInvoiceNumberSettings, onClose: () => setOpenSection(null) }), openSection === "branches" && /* @__PURE__ */ React.createElement(BranchSettingsModal, { branchSettings, setBranchSettings, onClose: () => setOpenSection(null) }));
+  )), openSection === "password" && /* @__PURE__ */ React.createElement(ChangePasswordModal, { user, users, setUsers, onClose: () => setOpenSection(null) }), openSection === "dev" && /* @__PURE__ */ React.createElement(DevResetModal, { onConfirmed: onDevReset, onClose: () => setOpenSection(null) }), openSection === "devSales" && /* @__PURE__ */ React.createElement(DevSalesResetModal, { onConfirmed: onDevSalesReset, onClose: () => setOpenSection(null) }), openSection === "tiers" && /* @__PURE__ */ React.createElement(TierSettingsModal, { tierSettings, setTierSettings, onClose: () => setOpenSection(null) }), openSection === "invoiceNumbering" && /* @__PURE__ */ React.createElement(InvoiceNumberSettingsModal, { invoiceNumberSettings, setInvoiceNumberSettings, onClose: () => setOpenSection(null) }), openSection === "branches" && /* @__PURE__ */ React.createElement(BranchSettingsModal, { branchSettings, setBranchSettings, onClose: () => setOpenSection(null) }));
 }
 function AdminScreen({ user, users, setUsers, setView }) {
   const pending = users.filter((u) => u.status === "pending");
@@ -4419,6 +4448,18 @@ function App() {
     setChangedToday([]);
     setStockAlerts([]);
   };
+  const performSalesReset = async () => {
+    const targets = [salesStore, returnsStore, returnTrackingStore];
+    for (const store of targets) {
+      const items = await store.loadAll();
+      if (items && items.length) {
+        for (const item of items) {
+          await store.remove(item.id);
+        }
+      }
+    }
+    setSales([]);
+  };
   const nav = (v) => {
     if (v === "logout") {
       handleLogout();
@@ -4490,7 +4531,7 @@ function App() {
       branchSettings,
       setView: nav
     }
-  ), screen === "orders" && currentUser && /* @__PURE__ */ React.createElement(OrdersScreen, { user: currentUser, sales, setSales, users, branchSettings, setView: nav }), screen === "transfers" && currentUser && /* @__PURE__ */ React.createElement(TransfersScreen, { user: currentUser, transfers, setTransfers, setView: nav }), screen === "reports" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.viewReports) && /* @__PURE__ */ React.createElement(ReportsScreen, { user: currentUser, sales, branchSettings, setView: nav }), screen === "stock-alerts" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageStockAlerts) && /* @__PURE__ */ React.createElement(StockAlertsScreen, { user: currentUser, stockAlerts, setStockAlerts, setView: nav }), screen === "attendance" && currentUser && /* @__PURE__ */ React.createElement(AttendanceScreen, { user: currentUser, users, attendance, setAttendance, withdrawals, setWithdrawals, branchSettings, setView: nav }), screen === "settings" && currentUser && /* @__PURE__ */ React.createElement(SettingsScreen, { user: currentUser, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset: performFullReset, setView: nav }), screen === "cashier" && currentUser && /* @__PURE__ */ React.createElement(CashierScreen, { user: currentUser, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, categories, setView: nav }), screen === "myInvoices" && currentUser && /* @__PURE__ */ React.createElement(MyInvoicesScreen, { user: currentUser, sales, setView: nav }), screen === "returns" && currentUser && /* @__PURE__ */ React.createElement(ReturnsScreen, { user: currentUser, sales, setView: nav }), screen === "admin" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageUsers) && /* @__PURE__ */ React.createElement(AdminScreen, { user: currentUser, users, setUsers, setView: nav }));
+  ), screen === "orders" && currentUser && /* @__PURE__ */ React.createElement(OrdersScreen, { user: currentUser, sales, setSales, users, branchSettings, setView: nav }), screen === "transfers" && currentUser && /* @__PURE__ */ React.createElement(TransfersScreen, { user: currentUser, transfers, setTransfers, setView: nav }), screen === "reports" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.viewReports) && /* @__PURE__ */ React.createElement(ReportsScreen, { user: currentUser, sales, branchSettings, setView: nav }), screen === "stock-alerts" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageStockAlerts) && /* @__PURE__ */ React.createElement(StockAlertsScreen, { user: currentUser, stockAlerts, setStockAlerts, setView: nav }), screen === "attendance" && currentUser && /* @__PURE__ */ React.createElement(AttendanceScreen, { user: currentUser, users, attendance, setAttendance, withdrawals, setWithdrawals, branchSettings, setView: nav }), screen === "settings" && currentUser && /* @__PURE__ */ React.createElement(SettingsScreen, { user: currentUser, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset: performFullReset, onDevSalesReset: performSalesReset, setView: nav }), screen === "cashier" && currentUser && /* @__PURE__ */ React.createElement(CashierScreen, { user: currentUser, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, categories, setView: nav }), screen === "myInvoices" && currentUser && /* @__PURE__ */ React.createElement(MyInvoicesScreen, { user: currentUser, sales, setView: nav }), screen === "returns" && currentUser && /* @__PURE__ */ React.createElement(ReturnsScreen, { user: currentUser, sales, setView: nav }), screen === "admin" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageUsers) && /* @__PURE__ */ React.createElement(AdminScreen, { user: currentUser, users, setUsers, setView: nav }));
 }
 const MY_INVOICES_PAGE_SIZE = 6;
 function invoiceDayLabel(ts) {
@@ -4730,6 +4771,8 @@ function ReturnsScreen({ user, sales, setView }) {
       employeeName: user.name,
       customerName: selected.customerName || null,
       branchName: selected.branchName || null,
+      dispatchLocation: selected.dispatchLocation || null,
+      fulfillment: selected.fulfillment || null,
       items: selectedItems.map((it) => ({ itemIndex: it.idx, productName: it.productName, unitPrice: it.unitPrice, qty: it.returnQty, lineTotal: Math.round((it.unitPrice * it.returnQty + Number.EPSILON) * 100) / 100 })),
       total: returnTotal,
       note: note.trim() || null,
