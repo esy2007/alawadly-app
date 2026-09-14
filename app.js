@@ -524,6 +524,10 @@ async function submitReturnAtomic(sale, selectedItems, returnRecord) {
     selectedItems.forEach((it) => {
       updatedItems[String(it.idx)] = (updatedItems[String(it.idx)] || 0) + it.returnQty;
     });
+    const returnDay = businessDayOf(returnRecord.createdAt);
+    const returnMonthId = returnDay.slice(0, 7);
+    const returnBranch = returnRecord.branchName || returnRecord.dispatchLocation || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
+    const returnMetricPrefix = returnRecord.fulfillment === "delivery" ? "returnsOrders" : "returnsSales";
     const body = {
       writes: [
         {
@@ -539,6 +543,15 @@ async function submitReturnAtomic(sale, selectedItems, returnRecord) {
             fields: toFirestoreFields(returnRecord)
           },
           currentDocument: { exists: false }
+        },
+        {
+          transform: {
+            document: `${resourceRoot}/monthly_aggregates_col/${returnMonthId}`,
+            fieldTransforms: [
+              { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Total`]), increment: toFirestoreValue(returnRecord.total) },
+              { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Count`]), increment: toFirestoreValue(1) }
+            ]
+          }
         }
       ]
     };
@@ -689,11 +702,112 @@ function businessDayRange(daysAgo) {
   const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 3, 0, 0, 0).getTime();
   return { start, end: start + 24 * 60 * 60 * 1e3 - 1 };
 }
+function currentCalendarWeekRange() {
+  const d = /* @__PURE__ */ new Date();
+  if (d.getHours() < 3) d.setDate(d.getDate() - 1);
+  const daysSinceSaturday = (d.getDay() + 1) % 7;
+  const saturday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - daysSinceSaturday, 3, 0, 0, 0);
+  const start = saturday.getTime();
+  return { start, end: start + 7 * 24 * 60 * 60 * 1e3 - 1 };
+}
+function calendarMonthRange(monthId) {
+  const [y, m] = (monthId || todayStr().slice(0, 7)).split("-").map(Number);
+  const start = new Date(y, m - 1, 1, 3, 0, 0, 0).getTime();
+  const end = new Date(y, m, 1, 3, 0, 0, 0).getTime() - 1;
+  return { start, end };
+}
 function rangeToTimestamps(range) {
   if (range === "today") return businessDayRange(0);
   if (range === "yesterday") return businessDayRange(1);
-  if (range === "week") return { start: businessDayRange(6).start, end: businessDayRange(0).end };
+  if (range === "week") return currentCalendarWeekRange();
+  if (range === "month") return calendarMonthRange();
+  if (range && /^\d{4}-\d{2}$/.test(range)) return calendarMonthRange(range);
   return { start: businessDayRange(89).start, end: businessDayRange(0).end };
+}
+function businessDaysInRange(startTs, endTs) {
+  const days = [];
+  let cursor = businessDayOf(startTs);
+  let cursorTs = startTs;
+  while (cursorTs <= endTs) {
+    days.push(cursor);
+    cursorTs += 24 * 60 * 60 * 1e3;
+    cursor = businessDayOf(cursorTs);
+  }
+  return [...new Set(days)];
+}
+function firestoreFieldPath(segments) {
+  return segments.map((seg) => "`" + String(seg).replace(/\\/g, "\\\\").replace(/`/g, "\\`") + "`").join(".");
+}
+async function incrementDailyAggregate(businessDay, branchName, metric, amount) {
+  try {
+    const token = await ensureAuth();
+    const monthId = businessDay.slice(0, 7);
+    const resourceRoot = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
+    const branch = branchName || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
+    const path = firestoreFieldPath(["days", businessDay, branch, metric]);
+    const body = {
+      writes: [
+        {
+          transform: {
+            document: `${resourceRoot}/monthly_aggregates_col/${monthId}`,
+            fieldTransforms: [{ fieldPath: path, increment: toFirestoreValue(amount) }]
+          }
+        }
+      ]
+    };
+    const res = await fetch(`${FIRESTORE_BASE}:commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) console.error("incrementDailyAggregate failed", businessDay, branch, metric, await res.text());
+  } catch (e) {
+    console.error("incrementDailyAggregate error", e);
+  }
+}
+async function fetchMonthlyAggregate(monthId) {
+  try {
+    const token = await ensureAuth();
+    const res = await fetch(`${FIRESTORE_BASE}/monthly_aggregates_col/${monthId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const doc = await res.json();
+      return { days: fromFirestoreFields(doc.fields).days || {} };
+    }
+    if (res.status === 404) return { days: {} };
+    notifyStoreError("monthly_aggregates_col", await readErrorDetail(res));
+    return null;
+  } catch (e) {
+    notifyStoreError("monthly_aggregates_col", e.message);
+    return null;
+  }
+}
+async function sumDailyAggregates(businessDays, branchFilter) {
+  const monthIds = [...new Set(businessDays.map((d) => d.slice(0, 7)))];
+  const monthDocs = await Promise.all(monthIds.map((m) => fetchMonthlyAggregate(m)));
+  if (monthDocs.some((d) => d === null)) return null;
+  const byMonth = {};
+  monthIds.forEach((m, i) => {
+    byMonth[m] = monthDocs[i];
+  });
+  const totals = { salesTotal: 0, salesCount: 0, ordersTotal: 0, ordersCount: 0, returnsSalesTotal: 0, returnsSalesCount: 0, returnsOrdersTotal: 0, returnsOrdersCount: 0 };
+  businessDays.forEach((day) => {
+    const monthDoc = byMonth[day.slice(0, 7)];
+    const dayData = monthDoc && monthDoc.days[day] || {};
+    Object.entries(dayData).forEach(([branch, metrics]) => {
+      if (branchFilter && branchFilter !== "all" && branch !== branchFilter) return;
+      totals.salesTotal += metrics.salesTotal || 0;
+      totals.salesCount += metrics.salesCount || 0;
+      totals.ordersTotal += metrics.ordersTotal || 0;
+      totals.ordersCount += metrics.ordersCount || 0;
+      totals.returnsSalesTotal += metrics.returnsSalesTotal || 0;
+      totals.returnsSalesCount += metrics.returnsSalesCount || 0;
+      totals.returnsOrdersTotal += metrics.returnsOrdersTotal || 0;
+      totals.returnsOrdersCount += metrics.returnsOrdersCount || 0;
+    });
+  });
+  return totals;
 }
 let syncingOfflineQueue = false;
 async function syncOfflineQueue() {
@@ -2416,6 +2530,8 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     setSales((s) => [...s, sale]);
     playBeep("success");
     salesStore.upsert(sale);
+    incrementDailyAggregate(businessDayOf(sale.createdAt), sale.branchName, "salesTotal", sale.total);
+    incrementDailyAggregate(businessDayOf(sale.createdAt), sale.branchName, "salesCount", 1);
     setLastSale(sale);
     const closedId = activeId;
     const remaining = invoices.filter((inv) => inv.id !== closedId);
@@ -3134,6 +3250,10 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
     };
     setSales(sales.map((s) => s.id === updated.id ? updated : s));
     salesStore.upsert(updated);
+    if (form.paidUpfront) {
+      incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersTotal", updated.total);
+      incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersCount", 1);
+    }
     setSendingOrder(null);
     return null;
   };
@@ -3155,6 +3275,8 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
     };
     setSales(sales.map((s) => s.id === updated.id ? updated : s));
     salesStore.upsert(updated);
+    incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersTotal", updated.total);
+    incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersCount", 1);
     if (updated.employeeName) {
       sendNotification(updated.employeeName, `\u0623\u0648\u0631\u062F\u0631 (\u0641\u0627\u062A\u0648\u0631\u0629 #${updated.invoiceNumber ?? "?"}) / (${updated.deliveryArea}) \u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645\u0647`);
     }
@@ -3365,19 +3487,43 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
   const [previewOrder, setPreviewOrder] = useState(null);
   const [previewSale, setPreviewSale] = useState(null);
   const [range, setRange] = useState("today");
+  const monthOptions = (() => {
+    const opts = [];
+    const d = /* @__PURE__ */ new Date();
+    d.setDate(1);
+    for (let i = 0; i < 12; i++) {
+      const id = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      opts.push({ id, label: d.toLocaleDateString("ar-EG", { year: "numeric", month: "long" }) });
+      d.setMonth(d.getMonth() - 1);
+    }
+    return opts;
+  })();
   const [fetchedSales, setFetchedSales] = useState([]);
-  const [fetchedReturns, setFetchedReturns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
   const { start: rangeStart, end: rangeEnd } = rangeToTimestamps(range);
+  const [aggTotals, setAggTotals] = useState(null);
+  const [aggLoading, setAggLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setAggLoading(true);
+    const days = businessDaysInRange(rangeStart, rangeEnd);
+    sumDailyAggregates(days, filterBranch).then((totals) => {
+      if (cancelled) return;
+      setAggTotals(totals);
+      setAggLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rangeStart, rangeEnd, filterBranch]);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setOffline(false);
     const cacheKey = `reports_range:${range}`;
-    const returnsCacheKey = `reports_returns_range:${range}`;
     (async () => {
-      const [result, returnsResult] = await Promise.all([fetchSalesInRange(rangeStart, rangeEnd), fetchReturnsInRange(rangeStart, rangeEnd)]);
+      const result = await fetchSalesInRange(rangeStart, rangeEnd);
       if (cancelled) return;
       if (result) {
         setFetchedSales(result);
@@ -3386,13 +3532,6 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
         const cached = await idbGet(cacheKey);
         setFetchedSales(cached || []);
         setOffline(true);
-      }
-      if (returnsResult) {
-        setFetchedReturns(returnsResult);
-        idbSet(returnsCacheKey, returnsResult);
-      } else {
-        const cachedReturns = await idbGet(returnsCacheKey);
-        setFetchedReturns(cachedReturns || []);
       }
       setLoading(false);
     })();
@@ -3422,9 +3561,6 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
   const salesTotal = visibleSales.reduce((s, sale) => s + sale.total, 0);
   const combinedTotal = ordersTotal + salesTotal;
   const combinedCount = visibleOrders.length + visibleSales.length;
-  const branchFilteredReturns = filterBranch === "all" ? fetchedReturns : fetchedReturns.filter((r) => r.branchName === filterBranch || r.dispatchLocation === filterBranch);
-  const visibleReturns = filterType === "all" ? branchFilteredReturns : filterType === "orders" ? branchFilteredReturns.filter((r) => r.fulfillment === "delivery") : branchFilteredReturns.filter((r) => r.fulfillment !== "delivery");
-  const returnsTotal = visibleReturns.reduce((s, r) => s + (r.total || 0), 0);
   const mergedItems = [
     ...visibleOrders.map((o) => ({ kind: "order", data: o, createdAt: o.createdAt })),
     ...visibleSales.map((s) => ({ kind: "sale", data: s, createdAt: s.createdAt }))
@@ -3442,7 +3578,9 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
     const deliveryStatusLabel = isDelivery ? s.deliveryStatus === "prepared" ? { label: "\u062A\u0645 \u0627\u0644\u062A\u062C\u0647\u064A\u0632", color: "#FBBF24" } : s.deliveryStatus === "sent" ? { label: "\u062A\u0645 \u0627\u0644\u0625\u0631\u0633\u0627\u0644", color: "#38BDF8" } : { label: "\u062A\u0645 \u0627\u0644\u0627\u0633\u062A\u0644\u0627\u0645", color: "#34D399" } : null;
     return /* @__PURE__ */ React.createElement("div", { key: s.id, className: "panel p-4 rounded-2xl" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-start justify-between mb-2" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", { className: "font-bold text-base text-white flex items-center gap-1.5" }, isDelivery ? /* @__PURE__ */ React.createElement(Icon, { name: "Truck", size: 15, className: "text-[#94A3B8]" }) : /* @__PURE__ */ React.createElement(Icon, { name: "Wallet", size: 15, className: "text-[#94A3B8]" }), isDelivery ? s.deliveryArea : s.customerName || "\u0628\u062F\u0648\u0646 \u0627\u0633\u0645 \u0632\u0628\u0648\u0646"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mt-0.5" }, "\u0641\u0627\u062A\u0648\u0631\u0629 #", s.invoiceNumber ?? "?", " \xB7 ", s.items.length, " \u0635\u0646\u0641", s.branchName || s.dispatchLocation ? ` \xB7 ${s.branchName || s.dispatchLocation}` : "")), /* @__PURE__ */ React.createElement("span", { className: "font-bold text-lg text-sky-400 tabular-nums" }, s.total)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between pt-2 border-t border-white/5" }, isDelivery ? /* @__PURE__ */ React.createElement("span", { className: "text-xs font-bold px-2.5 py-1 rounded-full", style: { background: `${deliveryStatusLabel.color}22`, color: deliveryStatusLabel.color } }, deliveryStatusLabel.label) : /* @__PURE__ */ React.createElement("span", { className: "text-xs font-bold px-2.5 py-1 rounded-full", style: { background: `${pay.color}22`, color: pay.color } }, pay.label), /* @__PURE__ */ React.createElement("span", { className: "text-xs font-bold text-amber-300" }, s.employeeName, " ", /* @__PURE__ */ React.createElement("span", { className: "text-[#64748B] font-normal" }, "\xB7 ", new Date(s.createdAt).toLocaleDateString("ar-EG")))), expanded && /* @__PURE__ */ React.createElement("div", { className: "mt-3 pt-3 border-t border-white/5 space-y-1.5 text-xs" }, isDelivery && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-[#CBD5E1]" }, /* @__PURE__ */ React.createElement("span", { className: "text-[#94A3B8]" }, "\u062A\u0644\u064A\u0641\u0648\u0646 \u0627\u0644\u0632\u0628\u0648\u0646: "), /* @__PURE__ */ React.createElement("span", { dir: "ltr" }, s.customerPhone)), s.repName && /* @__PURE__ */ React.createElement("p", { className: "text-[#CBD5E1]" }, /* @__PURE__ */ React.createElement("span", { className: "text-[#94A3B8]" }, "\u0627\u0644\u0645\u0646\u062F\u0648\u0628: "), s.repName), s.deliveryStatus === "done" && /* @__PURE__ */ React.createElement("p", { className: "text-[#CBD5E1]" }, /* @__PURE__ */ React.createElement("span", { className: "text-[#94A3B8]" }, "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639: "), pay.label), s.sentBy && /* @__PURE__ */ React.createElement("p", { className: "text-[#CBD5E1]" }, /* @__PURE__ */ React.createElement("span", { className: "text-[#94A3B8]" }, "\u0633\u062C\u0651\u0644 \u0627\u0644\u0625\u0631\u0633\u0627\u0644: "), s.sentBy, s.sentAt ? ` \xB7 ${new Date(s.sentAt).toLocaleString("ar-EG")}` : ""), s.receivedBy && /* @__PURE__ */ React.createElement("p", { className: "text-[#CBD5E1]" }, /* @__PURE__ */ React.createElement("span", { className: "text-[#94A3B8]" }, "\u0623\u0643\u0651\u062F \u0627\u0644\u0627\u0633\u062A\u0644\u0627\u0645: "), s.receivedBy, s.receivedAt ? ` \xB7 ${new Date(s.receivedAt).toLocaleString("ar-EG")}` : "")), s.items.map((it, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: "flex items-center justify-between text-[#CBD5E1]" }, /* @__PURE__ */ React.createElement("span", null, it.productName, " \xD7 ", it.qty), /* @__PURE__ */ React.createElement("span", { className: "tabular-nums" }, it.lineTotal))), /* @__PURE__ */ React.createElement("p", { className: "text-[#CBD5E1] pt-1.5 border-t border-white/5" }, /* @__PURE__ */ React.createElement("span", { className: "text-[#94A3B8]" }, "\u0648\u0642\u062A \u0627\u0644\u0628\u064A\u0639: "), new Date(s.createdAt).toLocaleString("ar-EG"))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mt-2" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setExpandedId(expanded ? null : s.id), className: "text-xs text-sky-400 font-semibold hover:underline" }, expanded ? "\u0625\u062E\u0641\u0627\u0621 \u0627\u0644\u062A\u0641\u0627\u0635\u064A\u0644" : "\u0639\u0631\u0636 \u0643\u0644 \u0627\u0644\u062A\u0641\u0627\u0635\u064A\u0644"), /* @__PURE__ */ React.createElement("button", { onClick: () => setPreviewSale(s), className: "text-xs btn-ghost px-3 py-1 rounded-lg font-semibold flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Icon, { name: "Printer", size: 13 }), " \u0637\u0628\u0627\u0639\u0629")));
   };
-  return /* @__PURE__ */ React.createElement("div", { className: "shop-root" }, /* @__PURE__ */ React.createElement(Header, { user, onLogout: () => setView("logout"), onBack: () => setView("menu"), title: "\u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", onNav: setView }), /* @__PURE__ */ React.createElement("div", { className: "max-w-lg mx-auto px-4 py-2 fade-up" }, loading ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#64748B] mb-3" }, "\u0628\u064A\u062D\u0645\u0651\u0644...") : offline ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-amber-400 mb-3" }, "\u0622\u062E\u0631 \u0646\u0633\u062E\u0629 \u0645\u062D\u0641\u0648\u0638\u0629 \u2014 \u0645\u0646 \u063A\u064A\u0631 \u0625\u0646\u062A\u0631\u0646\u062A") : null, /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 mb-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, filterType === "orders" ? "\u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639" : filterType === "sales" ? "\u0641\u0648\u0627\u062A\u064A\u0631 \u0627\u0644\u0643\u0627\u0634\u064A\u0631" : "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0639\u0645\u0644\u064A\u0627\u062A"), /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-emerald-400" }, combinedCount)), /* @__PURE__ */ React.createElement("div", { className: "text-left" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, "\u0635\u0627\u0641\u064A \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A", returnsTotal > 0 ? " (\u0628\u0639\u062F \u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A)" : ""), /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, combinedTotal - returnsTotal), returnsTotal > 0 && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-rose-400 tabular-nums" }, "\u0645\u0631\u062A\u062C\u0639\u0627\u062A: \u2212", returnsTotal, " \u062C"))), /* @__PURE__ */ React.createElement(
+  const aggGrossTotal = (filterType !== "orders" ? aggTotals?.salesTotal || 0 : 0) + (filterType !== "sales" ? aggTotals?.ordersTotal || 0 : 0);
+  const aggReturnsTotal = (filterType !== "orders" ? aggTotals?.returnsSalesTotal || 0 : 0) + (filterType !== "sales" ? aggTotals?.returnsOrdersTotal || 0 : 0);
+  return /* @__PURE__ */ React.createElement("div", { className: "shop-root" }, /* @__PURE__ */ React.createElement(Header, { user, onLogout: () => setView("logout"), onBack: () => setView("menu"), title: "\u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", onNav: setView }), /* @__PURE__ */ React.createElement("div", { className: "max-w-lg mx-auto px-4 py-2 fade-up" }, loading ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#64748B] mb-3" }, "\u0628\u064A\u062D\u0645\u0651\u0644...") : offline ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-amber-400 mb-3" }, "\u0622\u062E\u0631 \u0646\u0633\u062E\u0629 \u0645\u062D\u0641\u0648\u0638\u0629 \u2014 \u0645\u0646 \u063A\u064A\u0631 \u0625\u0646\u062A\u0631\u0646\u062A") : null, /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 mb-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, filterType === "orders" ? "\u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639" : filterType === "sales" ? "\u0641\u0648\u0627\u062A\u064A\u0631 \u0627\u0644\u0643\u0627\u0634\u064A\u0631" : "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0639\u0645\u0644\u064A\u0627\u062A"), /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-emerald-400" }, combinedCount)), /* @__PURE__ */ React.createElement("div", { className: "text-left" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, "\u0635\u0627\u0641\u064A \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A", aggReturnsTotal > 0 ? " (\u0628\u0639\u062F \u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A)" : ""), aggLoading ? /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, "...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, aggGrossTotal - aggReturnsTotal), aggReturnsTotal > 0 && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-rose-400 tabular-nums" }, "\u0645\u0631\u062A\u062C\u0639\u0627\u062A: \u2212", aggReturnsTotal, " \u062C")))), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => setFilterOpen(true),
@@ -3450,12 +3588,24 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
     },
     "\u0641\u0644\u062A\u0631\u0629",
     activeFilterCount > 0 && /* @__PURE__ */ React.createElement("span", { className: "bg-sky-500 text-white text-[10px] rounded-full w-5 h-5 flex items-center justify-center" }, activeFilterCount)
-  ), /* @__PURE__ */ React.createElement("div", { className: "space-y-3 pb-6" }, filterType === "all" && /* @__PURE__ */ React.createElement(React.Fragment, null, mergedItems.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-center text-[#64748B] py-8 text-sm" }, "\u0644\u0633\u0647 \u0645\u0641\u064A\u0634 \u0639\u0645\u0644\u064A\u0627\u062A"), mergedItems.map((item) => item.kind === "order" ? renderOrderCard(item.data) : renderSaleCard(item.data))), filterType === "orders" && /* @__PURE__ */ React.createElement(React.Fragment, null, visibleOrders.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-center text-[#64748B] py-8 text-sm" }, "\u0644\u0633\u0647 \u0645\u0641\u064A\u0634 \u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639"), visibleOrders.map(renderOrderCard)), filterType === "sales" && /* @__PURE__ */ React.createElement(React.Fragment, null, visibleSales.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-center text-[#64748B] py-8 text-sm" }, "\u0644\u0633\u0647 \u0645\u0641\u064A\u0634 \u0641\u0648\u0627\u062A\u064A\u0631 \u0643\u0627\u0634\u064A\u0631"), visibleSales.map(renderSaleCard)))), filterOpen && /* @__PURE__ */ React.createElement(Modal, { title: "\u0641\u0644\u062A\u0631\u0629 \u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", accent: "#0EA5E9", onClose: () => setFilterOpen(false) }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, "\u0627\u0644\u0641\u062A\u0631\u0629"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2 mb-4 overflow-x-auto" }, [
+  ), /* @__PURE__ */ React.createElement("div", { className: "space-y-3 pb-6" }, filterType === "all" && /* @__PURE__ */ React.createElement(React.Fragment, null, mergedItems.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-center text-[#64748B] py-8 text-sm" }, "\u0644\u0633\u0647 \u0645\u0641\u064A\u0634 \u0639\u0645\u0644\u064A\u0627\u062A"), mergedItems.map((item) => item.kind === "order" ? renderOrderCard(item.data) : renderSaleCard(item.data))), filterType === "orders" && /* @__PURE__ */ React.createElement(React.Fragment, null, visibleOrders.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-center text-[#64748B] py-8 text-sm" }, "\u0644\u0633\u0647 \u0645\u0641\u064A\u0634 \u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639"), visibleOrders.map(renderOrderCard)), filterType === "sales" && /* @__PURE__ */ React.createElement(React.Fragment, null, visibleSales.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-center text-[#64748B] py-8 text-sm" }, "\u0644\u0633\u0647 \u0645\u0641\u064A\u0634 \u0641\u0648\u0627\u062A\u064A\u0631 \u0643\u0627\u0634\u064A\u0631"), visibleSales.map(renderSaleCard)))), filterOpen && /* @__PURE__ */ React.createElement(Modal, { title: "\u0641\u0644\u062A\u0631\u0629 \u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", accent: "#0EA5E9", onClose: () => setFilterOpen(false) }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, "\u0627\u0644\u0641\u062A\u0631\u0629"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2 mb-2 overflow-x-auto" }, [
     { key: "today", label: "\u0627\u0644\u064A\u0648\u0645" },
     { key: "yesterday", label: "\u0623\u0645\u0633" },
-    { key: "week", label: "\u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u062F\u0647" },
+    { key: "week", label: "\u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u062F\u0647 (\u0633\u0628\u062A-\u062C\u0645\u0639\u0629)" },
+    { key: "month", label: "\u0627\u0644\u0634\u0647\u0631 \u062F\u0647" },
     { key: "all", label: "\u0622\u062E\u0631 3 \u0634\u0647\u0648\u0631" }
-  ].map((t) => /* @__PURE__ */ React.createElement("button", { key: t.key, onClick: () => setRange(t.key), className: `shrink-0 rounded-xl px-3 py-2 text-xs font-bold ${range === t.key ? "btn-sky" : "btn-ghost"}` }, t.label))), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, "\u0646\u0648\u0639 \u0627\u0644\u0639\u0645\u0644\u064A\u0629"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2 mb-4" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setFilterType("all"), className: `flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "all" ? "btn-sky" : "btn-ghost"}` }, "\u0627\u0644\u0643\u0644"), /* @__PURE__ */ React.createElement("button", { onClick: () => setFilterType("orders"), className: `flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "orders" ? "btn-sky" : "btn-ghost"}` }, "\u0623\u0648\u0631\u062F\u0631\u0627\u062A"), /* @__PURE__ */ React.createElement("button", { onClick: () => setFilterType("sales"), className: `flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "sales" ? "btn-sky" : "btn-ghost"}` }, "\u0643\u0627\u0634\u064A\u0631")), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, "\u0627\u0644\u0641\u0631\u0639"), /* @__PURE__ */ React.createElement(
+  ].map((t) => /* @__PURE__ */ React.createElement("button", { key: t.key, onClick: () => setRange(t.key), className: `shrink-0 rounded-xl px-3 py-2 text-xs font-bold ${range === t.key ? "btn-sky" : "btn-ghost"}` }, t.label))), /* @__PURE__ */ React.createElement(
+    "select",
+    {
+      value: /^\d{4}-\d{2}$/.test(range) ? range : "",
+      onChange: (e) => {
+        if (e.target.value) setRange(e.target.value);
+      },
+      className: "field-input w-full rounded-xl px-3 py-2 text-xs mb-4"
+    },
+    /* @__PURE__ */ React.createElement("option", { value: "" }, "\u0623\u0648 \u0627\u062E\u062A\u0627\u0631 \u0634\u0647\u0631 \u062A\u0627\u0646\u064A..."),
+    monthOptions.map((m) => /* @__PURE__ */ React.createElement("option", { key: m.id, value: m.id }, m.label))
+  ), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, "\u0646\u0648\u0639 \u0627\u0644\u0639\u0645\u0644\u064A\u0629"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2 mb-4" }, /* @__PURE__ */ React.createElement("button", { onClick: () => setFilterType("all"), className: `flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "all" ? "btn-sky" : "btn-ghost"}` }, "\u0627\u0644\u0643\u0644"), /* @__PURE__ */ React.createElement("button", { onClick: () => setFilterType("orders"), className: `flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "orders" ? "btn-sky" : "btn-ghost"}` }, "\u0623\u0648\u0631\u062F\u0631\u0627\u062A"), /* @__PURE__ */ React.createElement("button", { onClick: () => setFilterType("sales"), className: `flex-1 rounded-xl py-2 text-xs font-bold ${filterType === "sales" ? "btn-sky" : "btn-ghost"}` }, "\u0643\u0627\u0634\u064A\u0631")), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, "\u0627\u0644\u0641\u0631\u0639"), /* @__PURE__ */ React.createElement(
     "select",
     {
       value: filterBranch,
@@ -4341,7 +4491,13 @@ function App() {
     const signUp = await signUpWithEmailPassword(email, password);
     if (!signUp.ok) {
       setAuthLoading(false);
-      setAuthError("\u062D\u0635\u0644\u062A \u0645\u0634\u0643\u0644\u0629 \u0641\u064A \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u062D\u0633\u0627\u0628\u060C \u062C\u0631\u0628 \u062A\u0627\u0646\u064A");
+      if (/EMAIL_EXISTS/.test(signUp.detail || "")) {
+        setAuthError("\u0627\u0644\u0627\u0633\u0645 \u062F\u0647 \u0645\u062A\u0633\u062C\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u062F\u062E\u0648\u0644 \u0628\u064A\u0647 \u0628\u0627\u0644\u0641\u0639\u0644 (\u062D\u062A\u0649 \u0644\u0648 \u0645\u0634 \u0638\u0627\u0647\u0631 \u0641\u064A \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646) \u2014 \u0644\u0627\u0632\u0645 \u064A\u062A\u0645\u0633\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0642\u062F\u064A\u0645 \u0645\u0646 Firebase Authentication \u0627\u0644\u0623\u0648\u0644\u060C \u0645\u0634 \u0628\u0633 \u0645\u0646 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646");
+      } else if (/WEAK_PASSWORD/.test(signUp.detail || "")) {
+        setAuthError("\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0644\u0627\u0632\u0645 \u062A\u0643\u0648\u0646 6 \u0623\u062D\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644");
+      } else {
+        setAuthError("\u062D\u0635\u0644\u062A \u0645\u0634\u0643\u0644\u0629 \u0641\u064A \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u062D\u0633\u0627\u0628\u060C \u062C\u0631\u0628 \u062A\u0627\u0646\u064A");
+      }
       return;
     }
     setAuthTokens(signUp.data);
