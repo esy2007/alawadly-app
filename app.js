@@ -89,7 +89,9 @@ const ERROR_LOCATIONS = {
   sales_col: "13",
   notifications_col: "14",
   settings_col: "15",
-  returns_col: "16"
+  returns_col: "16",
+  return_tracking_col: "17",
+  monthly_aggregates_col: "18"
 };
 function classifyErrorType(detail) {
   const m = /^(\d{3})\s([\s\S]*)$/.exec(detail || "");
@@ -569,6 +571,40 @@ async function submitReturnAtomic(sale, selectedItems, returnRecord) {
   }
   return { ok: false, reason: "conflict" };
 }
+async function submitBootstrapAtomic(newUser) {
+  const resourceRoot = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
+  let token;
+  try {
+    token = await ensureAuth();
+  } catch (e) {
+    return false;
+  }
+  const body = {
+    writes: [
+      {
+        update: { name: `${resourceRoot}/users_col/${newUser.id}`, fields: toFirestoreFields(newUser) },
+        currentDocument: { exists: false }
+      },
+      {
+        update: {
+          name: `${resourceRoot}/meta_col/system_state`,
+          fields: toFirestoreFields({ bootstrapped: true, bootstrappedAt: Date.now(), bootstrappedBy: newUser.id })
+        },
+        currentDocument: { exists: false }
+      }
+    ]
+  };
+  try {
+    const res = await fetch(`${FIRESTORE_BASE}:commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
 const notificationsStore = makeCollectionStore("notifications_col");
 function sendNotification(forUser, message) {
   const notif = { id: uid(), forUser, message, read: false, createdAt: Date.now() };
@@ -1000,14 +1036,6 @@ function loadDataCache(key) {
     return null;
   }
 }
-async function resetProductVersions() {
-  try {
-    const token = await ensureAuth();
-    await fetch(PRODUCTS_VERSION_URL, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
-  } catch (e) {
-    console.error("resetProductVersions failed", e);
-  }
-}
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const IDB_NAME = "faaroon_idb";
 const IDB_STORE = "cache";
@@ -1395,8 +1423,7 @@ function validatePaymentMethod(pm, price) {
   }
   return null;
 }
-const userIsAdmin = (u) => !!u && (u.role === "admin" || u.role === "developer");
-const userIsDeveloper = (u) => !!u && u.role === "developer";
+const userIsAdmin = (u) => !!u && u.role === "admin";
 function tierRows(v) {
   if (Array.isArray(v)) return v.length ? v : [{ label: "", price: 0 }];
   if (typeof v === "number") return [{ label: "", price: v }];
@@ -1527,7 +1554,7 @@ function NotificationBell({ notifications, onMarkRead, onMarkAllRead }) {
     /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-[#64748B] mt-1 font-normal" }, new Date(n.createdAt).toLocaleString("ar-EG"))
   )))));
 }
-function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
+function MainMenu({ user, setView, onLogout, hasNew }) {
   const canPrices = userIsAdmin(user) || !!user.permissions?.manageProducts || !!user.permissions?.deleteProducts || !!user.permissions?.editPrices;
   const canAdmin = userIsAdmin(user) || !!user.permissions?.manageUsers;
   const canReports = userIsAdmin(user) || !!user.permissions?.viewReports;
@@ -1594,56 +1621,6 @@ function MainMenu({ user, setView, onLogout, hasNew, onDevReset }) {
     },
     "+"
   )));
-}
-function DevResetModal({ onClose, onConfirmed }) {
-  const [confirmText, setConfirmText] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  const doReset = async () => {
-    if (confirmText.trim() !== "\u062A\u0635\u0641\u064A\u0631") {
-      setError('\u0627\u0643\u062A\u0628 "\u062A\u0635\u0641\u064A\u0631" \u0628\u0627\u0644\u0638\u0628\u0637 \u0644\u0644\u062A\u0623\u0643\u064A\u062F');
-      return;
-    }
-    setError("");
-    setBusy(true);
-    await onConfirmed();
-    setBusy(false);
-    setDone(true);
-  };
-  return /* @__PURE__ */ React.createElement(Modal, { title: done ? "\u062A\u0645" : "\u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u0635\u0641\u064A\u0631", accent: "#F43F5E", onClose }, done ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-emerald-300 mb-4 leading-6" }, "\u062A\u0645 \u0645\u0633\u062D \u0643\u0644 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0628\u0646\u062C\u0627\u062D. \u062D\u0633\u0627\u0628\u0627\u062A \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646 \u0641\u0636\u0644\u062A \u0632\u064A \u0645\u0627 \u0647\u064A."), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "btn-sky w-full rounded-xl py-2.5 font-bold" }, "\u062A\u0645\u0627\u0645")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-rose-300 mb-3 leading-6" }, "\u0627\u0644\u062E\u0637\u0648\u0629 \u062F\u064A \u0647\u062A\u0645\u0633\u062D \u0643\u0644 \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0648\u0627\u0644\u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0648\u0627\u0644\u062A\u062D\u0648\u064A\u0644\u0627\u062A \u0648\u0627\u0644\u062A\u0635\u0646\u064A\u0641\u0627\u062A \u0646\u0647\u0627\u0626\u064A\u064B\u0627 \u0648\u0645\u0641\u064A\u0634 \u0631\u062C\u0648\u0639 \u0641\u064A\u0647\u0627. \u062D\u0633\u0627\u0628\u0627\u062A \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646 (\u0627\u0644\u0623\u062F\u0645\u0646 \u0648\u0627\u0644\u0645\u0648\u0638\u0641\u064A\u0646) \u0647\u062A\u0641\u0636\u0644 \u0632\u064A \u0645\u0627 \u0647\u064A."), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, '\u0627\u0643\u062A\u0628 "\u062A\u0635\u0641\u064A\u0631" \u0644\u0644\u062A\u0623\u0643\u064A\u062F'), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: confirmText,
-      onChange: (e) => setConfirmText(e.target.value),
-      className: "field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
-    }
-  ), error && /* @__PURE__ */ React.createElement("p", { className: "text-rose-400 text-xs mb-3" }, error), /* @__PURE__ */ React.createElement("button", { disabled: busy, onClick: doReset, className: "btn-rose w-full rounded-xl py-2.5 font-bold" }, busy ? "\u0628\u064A\u062A\u0635\u0641\u0631..." : "\u062A\u0635\u0641\u064A\u0631 \u0643\u0644 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0646\u0647\u0627\u0626\u064A\u064B\u0627")));
-}
-function DevSalesResetModal({ onClose, onConfirmed }) {
-  const [confirmText, setConfirmText] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  const doReset = async () => {
-    if (confirmText.trim() !== "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A") {
-      setError('\u0627\u0643\u062A\u0628 "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A" \u0628\u0627\u0644\u0638\u0628\u0637 \u0644\u0644\u062A\u0623\u0643\u064A\u062F');
-      return;
-    }
-    setError("");
-    setBusy(true);
-    await onConfirmed();
-    setBusy(false);
-    setDone(true);
-  };
-  return /* @__PURE__ */ React.createElement(Modal, { title: done ? "\u062A\u0645" : "\u062A\u0623\u0643\u064A\u062F \u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A", accent: "#F43F5E", onClose }, done ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-emerald-300 mb-4 leading-6" }, "\u0627\u062A\u0645\u0633\u062D\u062A \u0643\u0644 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0627\u0644\u0642\u062F\u064A\u0645\u0629 \u0628\u0646\u062C\u0627\u062D. \u0628\u0627\u0642\u064A \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062A\u0637\u0628\u064A\u0642 (\u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A\u060C \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646\u060C \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A) \u0641\u0636\u0644\u062A \u0632\u064A \u0645\u0627 \u0647\u064A."), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "btn-sky w-full rounded-xl py-2.5 font-bold" }, "\u062A\u0645\u0627\u0645")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-rose-300 mb-3 leading-6" }, "\u0627\u0644\u062E\u0637\u0648\u0629 \u062F\u064A \u0647\u062A\u0645\u0633\u062D ", /* @__PURE__ */ React.createElement("b", null, "\u0643\u0644 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A"), " \u0646\u0647\u0627\u0626\u064A\u064B\u0627 \u0648\u0645\u0641\u064A\u0634 \u0631\u062C\u0648\u0639 \u0641\u064A\u0647\u0627 \u2014 \u062F\u064A \u0628\u064A\u0627\u0646\u0627\u062A \u0645\u0628\u064A\u0639\u0627\u062A \u062D\u0642\u064A\u0642\u064A\u0629\u060C \u0645\u0634 \u0628\u064A\u0627\u0646\u0627\u062A \u062A\u062C\u0631\u0628\u0629. \u0628\u0627\u0642\u064A \u062D\u0627\u062C\u0627\u062A \u0627\u0644\u062A\u0637\u0628\u064A\u0642 (\u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A\u060C \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646\u060C \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A) \u0647\u062A\u0641\u0636\u0644 \u0632\u064A \u0645\u0627 \u0647\u064A."), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8] mb-1.5" }, '\u0627\u0643\u062A\u0628 "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A" \u0644\u0644\u062A\u0623\u0643\u064A\u062F'), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: confirmText,
-      onChange: (e) => setConfirmText(e.target.value),
-      className: "field-input w-full rounded-xl px-4 py-2.5 text-sm mb-3"
-    }
-  ), error && /* @__PURE__ */ React.createElement("p", { className: "text-rose-400 text-xs mb-3" }, error), /* @__PURE__ */ React.createElement("button", { disabled: busy, onClick: doReset, className: "btn-rose w-full rounded-xl py-2.5 font-bold" }, busy ? "\u0628\u064A\u062A\u0645\u0633\u062D..." : "\u0627\u0645\u0633\u062D \u0643\u0644 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0646\u0647\u0627\u0626\u064A\u064B\u0627")));
 }
 function TierPriceEditor({ label, color, rows, setRows }) {
   const [numPadRow, setNumPadRow] = useState(null);
@@ -4027,17 +4004,14 @@ function BranchSettingsModal({ branchSettings, setBranchSettings, onClose }) {
     }
   ), branches.length > 1 && /* @__PURE__ */ React.createElement("button", { onClick: () => removeBranch(b.id), className: "text-rose-400 shrink-0" }, /* @__PURE__ */ React.createElement(Icon, { name: "Trash2", size: 16 })))), /* @__PURE__ */ React.createElement("button", { onClick: addBranch, className: "w-full text-xs text-sky-400 font-semibold flex items-center justify-center gap-1 py-2 mb-3" }, /* @__PURE__ */ React.createElement(Icon, { name: "Plus", size: 14 }), " \u0625\u0636\u0627\u0641\u0629 \u0641\u0631\u0639 \u062C\u062F\u064A\u062F"), error && /* @__PURE__ */ React.createElement("p", { className: "text-rose-400 text-xs mb-3" }, error), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: save, className: "btn-emerald flex-1 rounded-xl py-2 text-sm font-bold" }, "\u062D\u0641\u0638"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "btn-ghost flex-1 rounded-xl py-2 text-sm font-bold" }, "\u0625\u0644\u063A\u0627\u0621")));
 }
-function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset, onDevSalesReset, setView }) {
+function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, setView }) {
   const isAdmin = userIsAdmin(user);
-  const isDev = userIsDeveloper(user);
   const canTierSettings = isAdmin || !!user.permissions?.manageTierSettings;
   const canInvoiceNumbering = isAdmin || !!user.permissions?.manageInvoiceNumbering;
   const canBranches = isAdmin || !!user.permissions?.manageBranches;
   const [openSection, setOpenSection] = useState(null);
   const items = [
     { key: "password", label: "\u062A\u063A\u064A\u064A\u0631 \u0643\u0644\u0645\u0629 \u0627\u0644\u0633\u0631", icon: "Lock" },
-    ...isDev ? [{ key: "dev", label: "\u0623\u062F\u0648\u0627\u062A \u0627\u0644\u0635\u064A\u0627\u0646\u0629 (Reset)", icon: "KeyRound" }] : [],
-    ...isDev ? [{ key: "devSales", label: "\u0645\u0633\u062D \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0627\u0644\u0642\u062F\u064A\u0645\u0629", icon: "RotateCcw" }] : [],
     ...canTierSettings ? [{ key: "tiers", label: "\u0645\u064A\u0632\u0627\u062A \u0625\u0636\u0627\u0641\u064A\u0629", icon: "Settings" }] : [],
     ...canInvoiceNumbering ? [{ key: "invoiceNumbering", label: "\u062A\u0631\u0642\u064A\u0645 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631", icon: "Tag" }] : [],
     ...canBranches ? [{ key: "branches", label: "\u0641\u0631\u0648\u0639 \u0627\u0644\u0645\u062D\u0644", icon: "MapPin" }] : []
@@ -4060,12 +4034,12 @@ function SettingsScreen({ user, users, setUsers, tierSettings, setTierSettings, 
     },
     /* @__PURE__ */ React.createElement(Icon, { name: "LogOut", size: 16, className: "text-rose-400" }),
     /* @__PURE__ */ React.createElement("span", { className: "font-bold text-sm text-rose-400" }, "\u062A\u0633\u062C\u064A\u0644 \u062E\u0631\u0648\u062C")
-  )), openSection === "password" && /* @__PURE__ */ React.createElement(ChangePasswordModal, { user, users, setUsers, onClose: () => setOpenSection(null) }), openSection === "dev" && /* @__PURE__ */ React.createElement(DevResetModal, { onConfirmed: onDevReset, onClose: () => setOpenSection(null) }), openSection === "devSales" && /* @__PURE__ */ React.createElement(DevSalesResetModal, { onConfirmed: onDevSalesReset, onClose: () => setOpenSection(null) }), openSection === "tiers" && /* @__PURE__ */ React.createElement(TierSettingsModal, { tierSettings, setTierSettings, onClose: () => setOpenSection(null) }), openSection === "invoiceNumbering" && /* @__PURE__ */ React.createElement(InvoiceNumberSettingsModal, { invoiceNumberSettings, setInvoiceNumberSettings, onClose: () => setOpenSection(null) }), openSection === "branches" && /* @__PURE__ */ React.createElement(BranchSettingsModal, { branchSettings, setBranchSettings, onClose: () => setOpenSection(null) }));
+  )), openSection === "password" && /* @__PURE__ */ React.createElement(ChangePasswordModal, { user, users, setUsers, onClose: () => setOpenSection(null) }), openSection === "tiers" && /* @__PURE__ */ React.createElement(TierSettingsModal, { tierSettings, setTierSettings, onClose: () => setOpenSection(null) }), openSection === "invoiceNumbering" && /* @__PURE__ */ React.createElement(InvoiceNumberSettingsModal, { invoiceNumberSettings, setInvoiceNumberSettings, onClose: () => setOpenSection(null) }), openSection === "branches" && /* @__PURE__ */ React.createElement(BranchSettingsModal, { branchSettings, setBranchSettings, onClose: () => setOpenSection(null) }));
 }
 function AdminScreen({ user, users, setUsers, setView }) {
   const pending = users.filter((u) => u.status === "pending");
-  const approved = users.filter((u) => u.status === "approved" && u.role !== "admin" && u.role !== "developer");
-  const otherAdmins = users.filter((u) => (u.role === "admin" || u.role === "developer") && u.id !== user.id);
+  const approved = users.filter((u) => u.status === "approved" && u.role !== "admin");
+  const otherAdmins = users.filter((u) => u.role === "admin" && u.id !== user.id);
   const [justActed, setJustActed] = useState(null);
   const isSeniorTo = (me, target) => {
     if (me.id === target.id) return false;
@@ -4116,7 +4090,7 @@ function AdminScreen({ user, users, setUsers, setView }) {
   };
   const removeUser = (id) => {
     const target = users.find((x) => x.id === id);
-    if (target && (target.role === "admin" || target.role === "developer") && !isSeniorTo(user, target)) return;
+    if (target && target.role === "admin" && !isSeniorTo(user, target)) return;
     setUsers(users.filter((u) => u.id !== id));
     usersStore.remove(id);
   };
@@ -4194,7 +4168,7 @@ function AdminScreen({ user, users, setUsers, setView }) {
   };
   return /* @__PURE__ */ React.createElement("div", { className: "shop-root" }, /* @__PURE__ */ React.createElement(Header, { user, onLogout: () => setView("logout"), onBack: () => setView("menu"), title: "\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646", onNav: setView }), /* @__PURE__ */ React.createElement("div", { className: "max-w-lg mx-auto px-4 py-4 fade-up space-y-6" }, /* @__PURE__ */ React.createElement("section", null, /* @__PURE__ */ React.createElement("h2", { className: "font-bold text-sm text-sky-400 mb-3" }, "\u0637\u0644\u0628\u0627\u062A \u0642\u064A\u062F \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 (", pending.length, ")"), pending.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-sm text-[#64748B]" }, "\u0644\u0627 \u062A\u0648\u062C\u062F \u0637\u0644\u0628\u0627\u062A \u062C\u062F\u064A\u062F\u0629"), /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, pending.map((u) => /* @__PURE__ */ React.createElement("div", { key: u.id, className: "panel rounded-2xl p-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-bold text-sm text-white" }, u.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-[#64748B]" }, "\u0637\u0644\u0628 \u0627\u0646\u0636\u0645\u0627\u0645 \u062C\u062F\u064A\u062F")), /* @__PURE__ */ React.createElement("div", { className: `flex gap-2 ${justActed === u.id ? "stamp-anim" : ""}` }, /* @__PURE__ */ React.createElement("button", { onClick: () => decide(u, "approved"), className: "btn-emerald rounded-lg p-2" }, /* @__PURE__ */ React.createElement(Icon, { name: "CheckCircle2", size: 17 })), /* @__PURE__ */ React.createElement("button", { onClick: () => decide(u, "rejected"), className: "btn-rose rounded-lg p-2" }, /* @__PURE__ */ React.createElement(Icon, { name: "XCircle", size: 17 }))))))), /* @__PURE__ */ React.createElement("section", null, /* @__PURE__ */ React.createElement("h2", { className: "font-bold text-sm text-sky-400 mb-3" }, "\u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u0648\u0646 \u0627\u0644\u0645\u0639\u062A\u0645\u062F\u0648\u0646 (", approved.length, ")"), approved.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-sm text-[#64748B]" }, "\u0644\u0627 \u064A\u0648\u062C\u062F \u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646 \u0628\u0639\u062F"), /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, approved.map((u) => /* @__PURE__ */ React.createElement("div", { key: u.id, className: "panel rounded-2xl p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mb-3" }, /* @__PURE__ */ React.createElement("div", { className: "font-bold text-sm flex items-center gap-2 text-white" }, u.name, " ", /* @__PURE__ */ React.createElement(StatusStamp, { status: u.status })), /* @__PURE__ */ React.createElement("button", { onClick: () => removeUser(u.id), className: "text-rose-400 hover:text-rose-300" }, /* @__PURE__ */ React.createElement(Icon, { name: "Trash2", size: 16 }))), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, PERMISSIONS.map((p) => /* @__PURE__ */ React.createElement("label", { key: p.key, className: "flex items-center gap-2 text-xs text-[#CBD5E1]" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!u.permissions?.[p.key], onChange: () => togglePermission(u, p.key) }), p.label))), /* @__PURE__ */ React.createElement("button", { onClick: () => promoteToAdmin(u), className: "btn-ghost w-full rounded-xl py-2 text-xs font-bold mt-3" }, "\u0631\u0641\u0639\u0647 \u0644\u0623\u062F\u0645\u0646 \u0643\u0627\u0645\u0644"))))), /* @__PURE__ */ React.createElement("section", null, /* @__PURE__ */ React.createElement("h2", { className: "font-bold text-sm text-sky-400 mb-3" }, "\u0627\u0644\u0623\u062F\u0645\u0646\u0632 \u0627\u0644\u0622\u062E\u0631\u064A\u0646 (", otherAdmins.length, ")"), otherAdmins.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-sm text-[#64748B]" }, "\u0645\u0641\u064A\u0634 \u0623\u062F\u0645\u0646\u0632 \u062A\u0627\u0646\u064A\u064A\u0646"), /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, otherAdmins.map((u) => {
     const senior = isSeniorTo(user, u);
-    return /* @__PURE__ */ React.createElement("div", { key: u.id, className: "panel rounded-2xl p-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-bold text-sm text-white" }, u.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-[#64748B]" }, u.role === "developer" ? "\u0645\u0637\u0648\u0651\u0631" : "\u0623\u062F\u0645\u0646", !u.promotedAt ? " \xB7 \u0623\u0635\u0644\u064A" : "")), u.role !== "developer" && (senior ? /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: () => demoteToEmployee(u), className: "btn-ghost rounded-lg px-3 py-1.5 text-xs font-bold" }, "\u062E\u0641\u0636\u0647 \u0644\u0645\u0648\u0638\u0641"), /* @__PURE__ */ React.createElement("button", { onClick: () => removeUser(u.id), className: "text-rose-400 hover:text-rose-300" }, /* @__PURE__ */ React.createElement(Icon, { name: "Trash2", size: 16 }))) : /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-[#64748B]" }, "\u0623\u0642\u062F\u0645 \u0645\u0646\u0643 \u2014 \u0645\u064A\u0646\u0641\u0639\u0634 \u062A\u0639\u062F\u0644\u0647")));
+    return /* @__PURE__ */ React.createElement("div", { key: u.id, className: "panel rounded-2xl p-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-bold text-sm text-white" }, u.name), /* @__PURE__ */ React.createElement("div", { className: "text-xs text-[#64748B]" }, "\u0623\u062F\u0645\u0646", !u.promotedAt ? " \xB7 \u0623\u0635\u0644\u064A" : "")), senior ? /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement("button", { onClick: () => demoteToEmployee(u), className: "btn-ghost rounded-lg px-3 py-1.5 text-xs font-bold" }, "\u062E\u0641\u0636\u0647 \u0644\u0645\u0648\u0638\u0641"), /* @__PURE__ */ React.createElement("button", { onClick: () => removeUser(u.id), className: "text-rose-400 hover:text-rose-300" }, /* @__PURE__ */ React.createElement(Icon, { name: "Trash2", size: 16 }))) : /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-[#64748B]" }, "\u0623\u0642\u062F\u0645 \u0645\u0646\u0643 \u2014 \u0645\u064A\u0646\u0641\u0639\u0634 \u062A\u0639\u062F\u0644\u0647"));
   }))), /* @__PURE__ */ React.createElement("section", null, /* @__PURE__ */ React.createElement("h2", { className: "font-bold text-sm text-sky-400 mb-3" }, "\u0627\u0644\u0646\u0633\u062E \u0627\u0644\u0627\u062D\u062A\u064A\u0627\u0637\u064A"), /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 space-y-3" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#CBD5E1] mb-2" }, "\u062A\u062D\u0645\u064A\u0644 \u0646\u0633\u062E\u0629 \u0645\u0646 \u0643\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062A\u0637\u0628\u064A\u0642 (\u0645\u0646\u062A\u062C\u0627\u062A\u060C \u0623\u0648\u0631\u062F\u0631\u0627\u062A\u060C \u062A\u062D\u0648\u064A\u0644\u0627\u062A\u060C \u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646...) \u0641\u064A \u0645\u0644\u0641 \u0648\u0627\u062D\u062F \u062A\u0642\u062F\u0631 \u062A\u062D\u062A\u0641\u0638 \u0628\u064A\u0647."), /* @__PURE__ */ React.createElement("button", { onClick: downloadBackup, disabled: backingUp, className: "btn-emerald w-full rounded-xl py-2.5 text-sm font-bold flex items-center justify-center gap-2" }, backingUp ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Icon, { name: "Loader2", size: 16, className: "animate-spin" }), " \u0628\u064A\u062C\u0647\u0651\u0632 \u0627\u0644\u0645\u0644\u0641...") : "\u062A\u062D\u0645\u064A\u0644 \u0646\u0633\u062E\u0629 \u0627\u062D\u062A\u064A\u0627\u0637\u064A\u0629")), /* @__PURE__ */ React.createElement("div", { className: "pt-3 border-t border-white/5" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#CBD5E1] mb-2" }, "\u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0645\u0646 \u0645\u0644\u0641 \u0646\u0633\u062E\u0629 \u0627\u062D\u062A\u064A\u0627\u0637\u064A\u0629 \u0633\u0627\u0628\u0642. \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062D\u0627\u0644\u064A\u0629 ", /* @__PURE__ */ React.createElement("span", { className: "font-bold text-amber-300" }, "\u0645\u0634 \u0647\u062A\u062A\u0645\u0633\u062D"), " \u2014 \u0627\u0644\u0645\u0644\u0641 \u0647\u064A\u062F\u0645\u062C \u0628\u064A\u0627\u0646\u0627\u062A\u0647 \u0645\u0639 \u0627\u0644\u0645\u0648\u062C\u0648\u062F."), restoring ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-sky-400 flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Icon, { name: "Loader2", size: 14, className: "animate-spin" }), " \u0628\u064A\u0633\u062A\u0639\u064A\u062F... ", restoreProgress) : restoreDone ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-emerald-400 font-bold flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Icon, { name: "CheckCircle2", size: 14 }), " \u062A\u0645\u062A \u0627\u0644\u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0628\u0646\u062C\u0627\u062D") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: () => restoreFileRef.current && restoreFileRef.current.click(), className: "btn-ghost w-full rounded-xl py-2.5 text-sm font-bold" }, "\u0627\u062E\u062A\u064A\u0627\u0631 \u0645\u0644\u0641 \u0646\u0633\u062E\u0629 \u0627\u062D\u062A\u064A\u0627\u0637\u064A\u0629"), restoreProgress && !restoring && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-rose-400 mt-2" }, restoreProgress)), /* @__PURE__ */ React.createElement(
     "input",
     {
@@ -4442,19 +4416,6 @@ function App() {
     }
     let u = storedUsers;
     let found = u.find((x) => x.authUid === signIn.data.localId) || u.find((x) => namesMatch(x.name, name));
-    if (!found && name === "FaAroon") {
-      found = {
-        id: signIn.data.localId,
-        name: "FaAroon",
-        authUid: signIn.data.localId,
-        authEmail: email,
-        role: "developer",
-        status: "approved",
-        permissions: { manageProducts: true, deleteProducts: true, editPrices: true }
-      };
-      await usersStore.upsert(found);
-      u = [...u, found];
-    }
     setUsers(u);
     setAuthLoading(false);
     if (!found) {
@@ -4491,9 +4452,7 @@ function App() {
     const signUp = await signUpWithEmailPassword(email, password);
     if (!signUp.ok) {
       setAuthLoading(false);
-      if (/EMAIL_EXISTS/.test(signUp.detail || "")) {
-        setAuthError("\u0627\u0644\u0627\u0633\u0645 \u062F\u0647 \u0645\u062A\u0633\u062C\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u062F\u062E\u0648\u0644 \u0628\u064A\u0647 \u0628\u0627\u0644\u0641\u0639\u0644 (\u062D\u062A\u0649 \u0644\u0648 \u0645\u0634 \u0638\u0627\u0647\u0631 \u0641\u064A \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646) \u2014 \u0644\u0627\u0632\u0645 \u064A\u062A\u0645\u0633\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0642\u062F\u064A\u0645 \u0645\u0646 Firebase Authentication \u0627\u0644\u0623\u0648\u0644\u060C \u0645\u0634 \u0628\u0633 \u0645\u0646 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646");
-      } else if (/WEAK_PASSWORD/.test(signUp.detail || "")) {
+      if (/WEAK_PASSWORD/.test(signUp.detail || "")) {
         setAuthError("\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0644\u0627\u0632\u0645 \u062A\u0643\u0648\u0646 6 \u0623\u062D\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644");
       } else {
         setAuthError("\u062D\u0635\u0644\u062A \u0645\u0634\u0643\u0644\u0629 \u0641\u064A \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u062D\u0633\u0627\u0628\u060C \u062C\u0631\u0628 \u062A\u0627\u0646\u064A");
@@ -4502,28 +4461,46 @@ function App() {
     }
     setAuthTokens(signUp.data);
     const freshUsers = await usersStore.loadAll();
-    const isFreshInstall = Array.isArray(freshUsers) && freshUsers.length === 0;
+    const looksEmpty = Array.isArray(freshUsers) && freshUsers.length === 0;
+    if (looksEmpty) {
+      const adminUser = {
+        id: signUp.data.localId,
+        name,
+        authUid: signUp.data.localId,
+        authEmail: email,
+        role: "admin",
+        status: "approved",
+        permissions: { manageProducts: false, deleteProducts: false, editPrices: false }
+      };
+      const becameAdmin = await submitBootstrapAtomic(adminUser);
+      if (becameAdmin) {
+        setUsers([...freshUsers || users, adminUser]);
+        setAuthLoading(false);
+        setCurrentUser(adminUser);
+        saveSession(adminUser);
+        setLastSeen({ prices: Date.now(), reports: Date.now() });
+        setScreen("menu");
+        return;
+      }
+    }
     const newUser = {
       id: signUp.data.localId,
       name,
       authUid: signUp.data.localId,
       authEmail: email,
-      role: isFreshInstall ? "admin" : "employee",
-      status: isFreshInstall ? "approved" : "pending",
+      role: "employee",
+      status: "pending",
       permissions: { manageProducts: false, deleteProducts: false, editPrices: false }
     };
-    setUsers([...freshUsers || users, newUser]);
-    usersStore.upsert(newUser);
+    const saved = await usersStore.upsert(newUser);
     setAuthLoading(false);
-    if (isFreshInstall) {
-      setCurrentUser(newUser);
-      saveSession(newUser);
-      setLastSeen({ prices: Date.now(), reports: Date.now() });
-      setScreen("menu");
-    } else {
-      setPendingStatus("pending");
-      setScreen("pending");
+    if (!saved) {
+      setAuthError("\u062D\u0635\u0644\u062A \u0645\u0634\u0643\u0644\u0629 \u0641\u064A \u062D\u0641\u0638 \u062D\u0633\u0627\u0628\u0643\u060C \u062C\u0631\u0628 \u062A\u0627\u0646\u064A");
+      return;
     }
+    setUsers([...freshUsers || users, newUser]);
+    setPendingStatus("pending");
+    setScreen("pending");
   };
   const handleLogout = () => {
     setCurrentUser(null);
@@ -4585,37 +4562,6 @@ function App() {
     }
     setProductsLoading(false);
   };
-  const performFullReset = async () => {
-    const targets = [productsStore, productImagesStore, ordersStore, transfersStore, categoriesStore, changesStore, stockAlertsStore];
-    for (const store of targets) {
-      const items = await store.loadAll();
-      if (items && items.length) {
-        for (const item of items) {
-          await store.remove(item.id);
-        }
-      }
-    }
-    setProducts([]);
-    setProductsLoaded(false);
-    idbSet("products_cache", { products: [], versions: {} });
-    resetProductVersions();
-    setTransfers([]);
-    setCategories([]);
-    setChangedToday([]);
-    setStockAlerts([]);
-  };
-  const performSalesReset = async () => {
-    const targets = [salesStore, returnsStore, returnTrackingStore];
-    for (const store of targets) {
-      const items = await store.loadAll();
-      if (items && items.length) {
-        for (const item of items) {
-          await store.remove(item.id);
-        }
-      }
-    }
-    setSales([]);
-  };
   const nav = (v) => {
     if (v === "logout") {
       handleLogout();
@@ -4670,7 +4616,7 @@ function App() {
   }, error: authError, loading: authLoading }), screen === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: handleRegister, goLogin: () => {
     setAuthError("");
     setScreen("login");
-  }, error: authError, loading: authLoading }), screen === "pending" && /* @__PURE__ */ React.createElement(PendingScreen, { status: pendingStatus, goLogin: () => setScreen("login") }), screen === "menu" && currentUser && /* @__PURE__ */ React.createElement(MainMenu, { user: currentUser, setView: nav, onLogout: handleLogout, hasNew, onDevReset: performFullReset }), screen === "prices" && currentUser && /* @__PURE__ */ React.createElement(
+  }, error: authError, loading: authLoading }), screen === "pending" && /* @__PURE__ */ React.createElement(PendingScreen, { status: pendingStatus, goLogin: () => setScreen("login") }), screen === "menu" && currentUser && /* @__PURE__ */ React.createElement(MainMenu, { user: currentUser, setView: nav, onLogout: handleLogout, hasNew }), screen === "prices" && currentUser && /* @__PURE__ */ React.createElement(
     PricesScreen,
     {
       user: currentUser,
@@ -4687,7 +4633,7 @@ function App() {
       branchSettings,
       setView: nav
     }
-  ), screen === "orders" && currentUser && /* @__PURE__ */ React.createElement(OrdersScreen, { user: currentUser, sales, setSales, users, branchSettings, setView: nav }), screen === "transfers" && currentUser && /* @__PURE__ */ React.createElement(TransfersScreen, { user: currentUser, transfers, setTransfers, setView: nav }), screen === "reports" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.viewReports) && /* @__PURE__ */ React.createElement(ReportsScreen, { user: currentUser, sales, branchSettings, setView: nav }), screen === "stock-alerts" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageStockAlerts) && /* @__PURE__ */ React.createElement(StockAlertsScreen, { user: currentUser, stockAlerts, setStockAlerts, setView: nav }), screen === "attendance" && currentUser && /* @__PURE__ */ React.createElement(AttendanceScreen, { user: currentUser, users, attendance, setAttendance, withdrawals, setWithdrawals, branchSettings, setView: nav }), screen === "settings" && currentUser && /* @__PURE__ */ React.createElement(SettingsScreen, { user: currentUser, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, onDevReset: performFullReset, onDevSalesReset: performSalesReset, setView: nav }), screen === "cashier" && currentUser && /* @__PURE__ */ React.createElement(CashierScreen, { user: currentUser, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, categories, setView: nav }), screen === "myInvoices" && currentUser && /* @__PURE__ */ React.createElement(MyInvoicesScreen, { user: currentUser, sales, setView: nav }), screen === "returns" && currentUser && /* @__PURE__ */ React.createElement(ReturnsScreen, { user: currentUser, sales, setView: nav }), screen === "admin" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageUsers) && /* @__PURE__ */ React.createElement(AdminScreen, { user: currentUser, users, setUsers, setView: nav }));
+  ), screen === "orders" && currentUser && /* @__PURE__ */ React.createElement(OrdersScreen, { user: currentUser, sales, setSales, users, branchSettings, setView: nav }), screen === "transfers" && currentUser && /* @__PURE__ */ React.createElement(TransfersScreen, { user: currentUser, transfers, setTransfers, setView: nav }), screen === "reports" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.viewReports) && /* @__PURE__ */ React.createElement(ReportsScreen, { user: currentUser, sales, branchSettings, setView: nav }), screen === "stock-alerts" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageStockAlerts) && /* @__PURE__ */ React.createElement(StockAlertsScreen, { user: currentUser, stockAlerts, setStockAlerts, setView: nav }), screen === "attendance" && currentUser && /* @__PURE__ */ React.createElement(AttendanceScreen, { user: currentUser, users, attendance, setAttendance, withdrawals, setWithdrawals, branchSettings, setView: nav }), screen === "settings" && currentUser && /* @__PURE__ */ React.createElement(SettingsScreen, { user: currentUser, users, setUsers, tierSettings, setTierSettings, invoiceNumberSettings, setInvoiceNumberSettings, branchSettings, setBranchSettings, setView: nav }), screen === "cashier" && currentUser && /* @__PURE__ */ React.createElement(CashierScreen, { user: currentUser, products, productsLoading, sales, setSales, tierSettings, invoiceNumberSettings, setInvoiceNumberSettings, usingCachedProducts, attendance, branchSettings, categories, setView: nav }), screen === "myInvoices" && currentUser && /* @__PURE__ */ React.createElement(MyInvoicesScreen, { user: currentUser, sales, setView: nav }), screen === "returns" && currentUser && /* @__PURE__ */ React.createElement(ReturnsScreen, { user: currentUser, sales, setView: nav }), screen === "admin" && currentUser && (userIsAdmin(currentUser) || currentUser.permissions?.manageUsers) && /* @__PURE__ */ React.createElement(AdminScreen, { user: currentUser, users, setUsers, setView: nav }));
 }
 const MY_INVOICES_PAGE_SIZE = 6;
 function invoiceDayLabel(ts) {
