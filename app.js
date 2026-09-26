@@ -293,6 +293,25 @@ function queueOfflineOp(collectionName, type, payload) {
 }
 function makeCollectionStore(collectionName) {
   const base = `${FIRESTORE_BASE}/${collectionName}`;
+  async function attempt(type, payload) {
+    try {
+      const token = await ensureAuth();
+      const res = type === "remove" ? await fetch(`${base}/${payload}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }) : await fetch(`${base}/${payload.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fields: toFirestoreFields(payload) })
+      });
+      if (!res.ok) {
+        notifyStoreError(collectionName, await readErrorDetail(res));
+        return "drop";
+      }
+      return "ok";
+    } catch (e) {
+      console.error(`firestore ${type} ${collectionName} failed`, e);
+      notifyStoreError(collectionName, e.message);
+      return "retry";
+    }
+  }
   return {
     async loadAll() {
       try {
@@ -323,43 +342,18 @@ function makeCollectionStore(collectionName) {
     // our own `id` field, so concurrent edits to two different records never touch
     // the same document.
     async upsert(obj) {
-      try {
-        const token = await ensureAuth();
-        const res = await fetch(`${base}/${obj.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ fields: toFirestoreFields(obj) })
-        });
-        if (!res.ok) {
-          queueOfflineOp(collectionName, "upsert", obj);
-          notifyStoreError(collectionName, await readErrorDetail(res));
-          return false;
-        }
-        return true;
-      } catch (e) {
-        console.error(`firestore upsert ${collectionName} failed`, e);
-        queueOfflineOp(collectionName, "upsert", obj);
-        notifyStoreError(collectionName, e.message);
-        return false;
-      }
+      const result = await attempt("upsert", obj);
+      if (result === "retry") queueOfflineOp(collectionName, "upsert", obj);
+      return result === "ok";
     },
     async remove(id) {
-      try {
-        const token = await ensureAuth();
-        const res = await fetch(`${base}/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) {
-          queueOfflineOp(collectionName, "remove", id);
-          notifyStoreError(collectionName, await readErrorDetail(res));
-          return false;
-        }
-        return true;
-      } catch (e) {
-        console.error(`firestore remove ${collectionName} failed`, e);
-        queueOfflineOp(collectionName, "remove", id);
-        notifyStoreError(collectionName, e.message);
-        return false;
-      }
-    }
+      const result = await attempt("remove", id);
+      if (result === "retry") queueOfflineOp(collectionName, "remove", id);
+      return result === "ok";
+    },
+    // Only for syncOfflineQueue, to retry an already-queued op without it
+    // getting queued a second time from inside upsert/remove above.
+    _attempt: attempt
   };
 }
 const usersStore = makeCollectionStore("users_col");
@@ -855,8 +849,8 @@ async function syncOfflineQueue() {
   for (const op of queue) {
     const store = STORE_BY_COLLECTION[op.collectionName];
     if (!store) continue;
-    const ok = op.type === "remove" ? await store.remove(op.payload) : await store.upsert(op.payload);
-    if (!ok) remaining.push(op);
+    const result = await store._attempt(op.type, op.payload);
+    if (result === "retry") remaining.push(op);
   }
   setOfflineQueueRaw(remaining);
   notifyQueueChange();
