@@ -524,6 +524,37 @@ async function submitReturnAtomic(sale, selectedItems, returnRecord) {
     const returnMonthId = returnDay.slice(0, 7);
     const returnBranch = returnRecord.branchName || returnRecord.dispatchLocation || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
     const returnMetricPrefix = returnRecord.fulfillment === "delivery" ? "returnsOrders" : "returnsSales";
+    const saleDay = businessDayOf(sale.createdAt);
+    const saleMonthId = saleDay.slice(0, 7);
+    const saleBranch = sale.branchName || sale.dispatchLocation || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
+    const saleKind = sale.fulfillment === "delivery" ? "orders" : "sales";
+    const invoiceFieldTransform = {
+      fieldPath: firestoreFieldPath(["days", saleDay, saleBranch, saleKind, sale.id]),
+      increment: toFirestoreValue(-returnRecord.total)
+    };
+    const returnFieldTransforms = [
+      { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Total`]), increment: toFirestoreValue(returnRecord.total) },
+      { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Count`]), increment: toFirestoreValue(1) }
+    ];
+    const aggregateWrites = saleMonthId === returnMonthId ? [{
+      transform: {
+        document: `${resourceRoot}/monthly_aggregates_col/${returnMonthId}`,
+        fieldTransforms: [...returnFieldTransforms, invoiceFieldTransform]
+      }
+    }] : [
+      {
+        transform: {
+          document: `${resourceRoot}/monthly_aggregates_col/${returnMonthId}`,
+          fieldTransforms: returnFieldTransforms
+        }
+      },
+      {
+        transform: {
+          document: `${resourceRoot}/monthly_aggregates_col/${saleMonthId}`,
+          fieldTransforms: [invoiceFieldTransform]
+        }
+      }
+    ];
     const body = {
       writes: [
         {
@@ -540,15 +571,7 @@ async function submitReturnAtomic(sale, selectedItems, returnRecord) {
           },
           currentDocument: { exists: false }
         },
-        {
-          transform: {
-            document: `${resourceRoot}/monthly_aggregates_col/${returnMonthId}`,
-            fieldTransforms: [
-              { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Total`]), increment: toFirestoreValue(returnRecord.total) },
-              { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Count`]), increment: toFirestoreValue(1) }
-            ]
-          }
-        }
+        ...aggregateWrites
       ]
     };
     try {
@@ -775,13 +798,13 @@ function businessDaysInRange(startTs, endTs) {
 function firestoreFieldPath(segments) {
   return segments.map((seg) => "`" + String(seg).replace(/\\/g, "\\\\").replace(/`/g, "\\`") + "`").join(".");
 }
-async function incrementDailyAggregate(businessDay, branchName, metric, amount) {
+async function incrementInvoiceAggregate(businessDay, branchName, kind, invoiceId, amount) {
   try {
     const token = await ensureAuth();
     const monthId = businessDay.slice(0, 7);
     const resourceRoot = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
     const branch = branchName || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
-    const path = firestoreFieldPath(["days", businessDay, branch, metric]);
+    const path = firestoreFieldPath(["days", businessDay, branch, kind, invoiceId]);
     const body = {
       writes: [
         {
@@ -797,9 +820,9 @@ async function incrementDailyAggregate(businessDay, branchName, metric, amount) 
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     });
-    if (!res.ok) console.error("incrementDailyAggregate failed", businessDay, branch, metric, await res.text());
+    if (!res.ok) console.error("incrementInvoiceAggregate failed", businessDay, branch, kind, invoiceId, await res.text());
   } catch (e) {
-    console.error("incrementDailyAggregate error", e);
+    console.error("incrementInvoiceAggregate error", e);
   }
 }
 async function fetchMonthlyAggregate(monthId) {
@@ -834,10 +857,12 @@ async function sumDailyAggregates(businessDays, branchFilter) {
     const dayData = monthDoc && monthDoc.days[day] || {};
     Object.entries(dayData).forEach(([branch, metrics]) => {
       if (branchFilter && branchFilter !== "all" && branch !== branchFilter) return;
-      totals.salesTotal += metrics.salesTotal || 0;
-      totals.salesCount += metrics.salesCount || 0;
-      totals.ordersTotal += metrics.ordersTotal || 0;
-      totals.ordersCount += metrics.ordersCount || 0;
+      const salesEntries = Object.values(metrics.sales || {});
+      const ordersEntries = Object.values(metrics.orders || {});
+      totals.salesTotal += salesEntries.reduce((s, v) => s + (v || 0), 0);
+      totals.salesCount += salesEntries.length;
+      totals.ordersTotal += ordersEntries.reduce((s, v) => s + (v || 0), 0);
+      totals.ordersCount += ordersEntries.length;
       totals.returnsSalesTotal += metrics.returnsSalesTotal || 0;
       totals.returnsSalesCount += metrics.returnsSalesCount || 0;
       totals.returnsOrdersTotal += metrics.returnsOrdersTotal || 0;
@@ -2509,8 +2534,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     setSales((s) => [...s, sale]);
     playBeep("success");
     salesStore.upsert(sale);
-    incrementDailyAggregate(businessDayOf(sale.createdAt), sale.branchName, "salesTotal", sale.total);
-    incrementDailyAggregate(businessDayOf(sale.createdAt), sale.branchName, "salesCount", 1);
+    incrementInvoiceAggregate(businessDayOf(sale.createdAt), sale.branchName, "sales", sale.id, sale.total);
     setLastSale(sale);
     const closedId = activeId;
     const remaining = invoices.filter((inv) => inv.id !== closedId);
@@ -3235,8 +3259,7 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
     setSales(sales.map((s) => s.id === updated.id ? updated : s));
     salesStore.upsert(updated);
     if (form.paidUpfront) {
-      incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersTotal", updated.total);
-      incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersCount", 1);
+      incrementInvoiceAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "orders", updated.id, updated.total);
     }
     setSendingOrder(null);
     return null;
@@ -3259,8 +3282,7 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
     };
     setSales(sales.map((s) => s.id === updated.id ? updated : s));
     salesStore.upsert(updated);
-    incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersTotal", updated.total);
-    incrementDailyAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "ordersCount", 1);
+    incrementInvoiceAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "orders", updated.id, updated.total);
     if (updated.employeeName) {
       sendNotification(updated.employeeName, `\u0623\u0648\u0631\u062F\u0631 (\u0641\u0627\u062A\u0648\u0631\u0629 #${updated.invoiceNumber ?? "?"}) / (${updated.deliveryArea}) \u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645\u0647`);
     }
@@ -3564,7 +3586,7 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
   };
   const aggGrossTotal = (filterType !== "orders" ? aggTotals?.salesTotal || 0 : 0) + (filterType !== "sales" ? aggTotals?.ordersTotal || 0 : 0);
   const aggReturnsTotal = (filterType !== "orders" ? aggTotals?.returnsSalesTotal || 0 : 0) + (filterType !== "sales" ? aggTotals?.returnsOrdersTotal || 0 : 0);
-  return /* @__PURE__ */ React.createElement("div", { className: "shop-root" }, /* @__PURE__ */ React.createElement(Header, { user, onLogout: () => setView("logout"), onBack: () => setView("menu"), title: "\u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", onNav: setView }), /* @__PURE__ */ React.createElement("div", { className: "max-w-lg mx-auto px-4 py-2 fade-up" }, loading ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#64748B] mb-3" }, "\u0628\u064A\u062D\u0645\u0651\u0644...") : offline ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-amber-400 mb-3" }, "\u0622\u062E\u0631 \u0646\u0633\u062E\u0629 \u0645\u062D\u0641\u0648\u0638\u0629 \u2014 \u0645\u0646 \u063A\u064A\u0631 \u0625\u0646\u062A\u0631\u0646\u062A") : null, /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 mb-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, filterType === "orders" ? "\u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639" : filterType === "sales" ? "\u0641\u0648\u0627\u062A\u064A\u0631 \u0627\u0644\u0643\u0627\u0634\u064A\u0631" : "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0639\u0645\u0644\u064A\u0627\u062A"), /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-emerald-400" }, combinedCount)), /* @__PURE__ */ React.createElement("div", { className: "text-left" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, "\u0635\u0627\u0641\u064A \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A", aggReturnsTotal > 0 ? " (\u0628\u0639\u062F \u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A)" : ""), aggLoading ? /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, "...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, aggGrossTotal - aggReturnsTotal), aggReturnsTotal > 0 && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-rose-400 tabular-nums" }, "\u0645\u0631\u062A\u062C\u0639\u0627\u062A: \u2212", aggReturnsTotal, " \u062C")))), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "shop-root" }, /* @__PURE__ */ React.createElement(Header, { user, onLogout: () => setView("logout"), onBack: () => setView("menu"), title: "\u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", onNav: setView }), /* @__PURE__ */ React.createElement("div", { className: "max-w-lg mx-auto px-4 py-2 fade-up" }, loading ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#64748B] mb-3" }, "\u0628\u064A\u062D\u0645\u0651\u0644...") : offline ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-amber-400 mb-3" }, "\u0622\u062E\u0631 \u0646\u0633\u062E\u0629 \u0645\u062D\u0641\u0648\u0638\u0629 \u2014 \u0645\u0646 \u063A\u064A\u0631 \u0625\u0646\u062A\u0631\u0646\u062A") : null, /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 mb-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, filterType === "orders" ? "\u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639" : filterType === "sales" ? "\u0641\u0648\u0627\u062A\u064A\u0631 \u0627\u0644\u0643\u0627\u0634\u064A\u0631" : "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0639\u0645\u0644\u064A\u0627\u062A"), /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-emerald-400" }, combinedCount)), /* @__PURE__ */ React.createElement("div", { className: "text-left" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, "\u0635\u0627\u0641\u064A \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A", aggReturnsTotal > 0 ? " (\u0628\u0639\u062F \u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A)" : ""), aggLoading ? /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, "...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, aggGrossTotal), aggReturnsTotal > 0 && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-rose-400 tabular-nums" }, "\u0641\u064A\u0647\u0627 \u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0628\u0642\u064A\u0645\u0629 ", aggReturnsTotal, " \u062C")))), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => setFilterOpen(true),
