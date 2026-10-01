@@ -1617,7 +1617,7 @@ function AutocompleteInput({ value, onChange, options, placeholder, className, i
   ))));
 }
 function Modal({ title, accent = "#38BDF8", onClose, children, maxWidthClass = "max-w-sm" }) {
-  return /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 z-50 flex items-center justify-center px-4 modal-backdrop", onClick: onClose }, /* @__PURE__ */ React.createElement("div", { className: `panel rounded-2xl w-full ${maxWidthClass} p-5 modal-pop max-h-[85dvh] overflow-y-auto`, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mb-4" }, /* @__PURE__ */ React.createElement("h3", { className: "font-bold text-base", style: { color: accent } }, title), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "text-[#94A3B8] hover:text-white" }, /* @__PURE__ */ React.createElement(Icon, { name: "X", size: 18 }))), children));
+  return /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 z-50 flex items-center justify-center px-4 modal-backdrop", onClick: onClose }, /* @__PURE__ */ React.createElement("div", { className: `panel rounded-2xl w-full ${maxWidthClass} p-5 modal-pop max-h-[90vh] overflow-y-auto`, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mb-4" }, /* @__PURE__ */ React.createElement("h3", { className: "font-bold text-base", style: { color: accent } }, title), /* @__PURE__ */ React.createElement("button", { onClick: onClose, className: "text-[#94A3B8] hover:text-white" }, /* @__PURE__ */ React.createElement(Icon, { name: "X", size: 18 }))), children));
 }
 function LoginScreen({ onLogin, goRegister, error, loading }) {
   const [name, setName] = useState("");
@@ -2198,7 +2198,7 @@ function ProductPickerModal({ product, invoice, existingItem, tierSettings, user
       title: existingItem ? "\u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u0646\u062A\u062C" : "\u0625\u0636\u0627\u0641\u0629 \u0645\u0646\u062A\u062C \u0644\u0644\u0641\u0627\u062A\u0648\u0631\u0629",
       accent: "#10B981",
       onClose,
-      maxWidthClass: "max-w-sm sm:max-w-2xl"
+      maxWidthClass: "max-w-sm sm:max-w-4xl"
     },
     /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3 mb-4" }, /* @__PURE__ */ React.createElement(ProductThumb, { product: { image: displayImage } }), /* @__PURE__ */ React.createElement("p", { className: "font-bold text-sm" }, product.name)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mb-1.5" }, /* @__PURE__ */ React.createElement("span", { className: "text-xs text-[#94A3B8]" }, "\u0627\u0644\u062A\u0635\u0646\u064A\u0641"), !tierPickerOpen && canQuickTier && /* @__PURE__ */ React.createElement("button", { onClick: () => setTierPickerOpen(true), className: "text-[11px] text-sky-400 font-semibold" }, "\u062A\u063A\u064A\u064A\u0631")), tierPickerOpen ? /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-2 mb-4" }, activeTiers(tierSettings).map((tier) => /* @__PURE__ */ React.createElement(
       TierColorButton,
