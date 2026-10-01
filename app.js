@@ -497,6 +497,21 @@ async function fetchReturnTracking(saleId) {
     return null;
   }
 }
+async function checkAggregateGuardExists(invoiceId) {
+  try {
+    const token = await ensureAuth();
+    const res = await fetch(`${FIRESTORE_BASE}/invoice_aggregate_writes_col/${invoiceId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) return true;
+    if (res.status === 404) return false;
+    notifyStoreError("invoice_aggregate_writes_col", await readErrorDetail(res));
+    return null;
+  } catch (e) {
+    notifyStoreError("invoice_aggregate_writes_col", e.message);
+    return null;
+  }
+}
 async function submitReturnAtomic(sale, selectedItems, returnRecord) {
   const resourceRoot = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
   const trackingPath = `return_tracking_col/${sale.id}`;
@@ -528,32 +543,50 @@ async function submitReturnAtomic(sale, selectedItems, returnRecord) {
     const saleMonthId = saleDay.slice(0, 7);
     const saleBranch = sale.branchName || sale.dispatchLocation || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
     const saleKind = sale.fulfillment === "delivery" ? "orders" : "sales";
-    const invoiceFieldTransform = {
-      fieldPath: firestoreFieldPath(["days", saleDay, saleBranch, saleKind, sale.id]),
-      increment: toFirestoreValue(-returnRecord.total)
-    };
+    const saleFieldPath = firestoreFieldPath(["days", saleDay, saleBranch, saleKind, sale.id]);
+    const guardExists = await checkAggregateGuardExists(sale.id);
+    if (guardExists === null) return { ok: false, reason: "offline" };
+    const invoiceAggregateWrites = guardExists ? [{
+      transform: {
+        document: `${resourceRoot}/monthly_aggregates_col/${saleMonthId}`,
+        fieldTransforms: [{ fieldPath: saleFieldPath, increment: toFirestoreValue(-returnRecord.total) }]
+      }
+    }] : [
+      {
+        update: {
+          name: `${resourceRoot}/invoice_aggregate_writes_col/${sale.id}`,
+          fields: toFirestoreFields({ invoiceId: sale.id, businessDay: saleDay, branch: saleBranch, kind: saleKind, amount: sale.total, claimedByReturn: true })
+        },
+        currentDocument: { exists: false }
+      },
+      {
+        transform: {
+          document: `${resourceRoot}/monthly_aggregates_col/${saleMonthId}`,
+          fieldTransforms: [{ fieldPath: saleFieldPath, increment: toFirestoreValue(sale.total - returnRecord.total) }]
+        }
+      }
+    ];
     const returnFieldTransforms = [
       { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Total`]), increment: toFirestoreValue(returnRecord.total) },
       { fieldPath: firestoreFieldPath(["days", returnDay, returnBranch, `${returnMetricPrefix}Count`]), increment: toFirestoreValue(1) }
     ];
-    const aggregateWrites = saleMonthId === returnMonthId ? [{
-      transform: {
-        document: `${resourceRoot}/monthly_aggregates_col/${returnMonthId}`,
-        fieldTransforms: [...returnFieldTransforms, invoiceFieldTransform]
+    const invoiceTransformWrite = invoiceAggregateWrites[invoiceAggregateWrites.length - 1];
+    const aggregateWrites = saleMonthId === returnMonthId ? [
+      ...invoiceAggregateWrites.slice(0, -1),
+      {
+        transform: {
+          document: invoiceTransformWrite.transform.document,
+          fieldTransforms: [...returnFieldTransforms, ...invoiceTransformWrite.transform.fieldTransforms]
+        }
       }
-    }] : [
+    ] : [
       {
         transform: {
           document: `${resourceRoot}/monthly_aggregates_col/${returnMonthId}`,
           fieldTransforms: returnFieldTransforms
         }
       },
-      {
-        transform: {
-          document: `${resourceRoot}/monthly_aggregates_col/${saleMonthId}`,
-          fieldTransforms: [invoiceFieldTransform]
-        }
-      }
+      ...invoiceAggregateWrites
     ];
     const body = {
       writes: [
@@ -798,19 +831,31 @@ function businessDaysInRange(startTs, endTs) {
 function firestoreFieldPath(segments) {
   return segments.map((seg) => "`" + String(seg).replace(/\\/g, "\\\\").replace(/`/g, "\\`") + "`").join(".");
 }
-async function incrementInvoiceAggregate(businessDay, branchName, kind, invoiceId, amount) {
+async function attemptInvoiceAggregateWrite(businessDay, branchName, kind, invoiceId, amount) {
   try {
     const token = await ensureAuth();
     const monthId = businessDay.slice(0, 7);
     const resourceRoot = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
     const branch = branchName || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
-    const path = firestoreFieldPath(["days", businessDay, branch, kind, invoiceId]);
+    const fieldPath = firestoreFieldPath(["days", businessDay, branch, kind, invoiceId]);
     const body = {
       writes: [
         {
+          update: {
+            name: `${resourceRoot}/invoice_aggregate_writes_col/${invoiceId}`,
+            fields: toFirestoreFields({ invoiceId, businessDay, branch, kind, amount })
+          },
+          currentDocument: { exists: false }
+        },
+        {
+          // increment (+amount), NOT a plain set: a return that landed before
+          // this write (e.g. this was stuck in the retry queue) has already
+          // put -returned into this same field, and increments commute —
+          // 1000 + (-300) = 700 in either order. The guard above is what
+          // makes it apply exactly once.
           transform: {
             document: `${resourceRoot}/monthly_aggregates_col/${monthId}`,
-            fieldTransforms: [{ fieldPath: path, increment: toFirestoreValue(amount) }]
+            fieldTransforms: [{ fieldPath, increment: toFirestoreValue(amount) }]
           }
         }
       ]
@@ -820,10 +865,58 @@ async function incrementInvoiceAggregate(businessDay, branchName, kind, invoiceI
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     });
-    if (!res.ok) console.error("incrementInvoiceAggregate failed", businessDay, branch, kind, invoiceId, await res.text());
+    if (res.ok) return "ok";
+    if (res.status >= 500 || res.status === 429 || res.status === 408) {
+      console.error("attemptInvoiceAggregateWrite temporary failure, will retry", res.status);
+      return "retry";
+    }
+    console.error("attemptInvoiceAggregateWrite not applied", businessDay, branch, kind, invoiceId, await res.text());
+    return "drop";
   } catch (e) {
-    console.error("incrementInvoiceAggregate error", e);
+    console.error("attemptInvoiceAggregateWrite network error", e);
+    return "retry";
   }
+}
+const AGG_QUEUE_KEY = "faaroon_agg_queue_v1";
+let aggQueueIdSeq = 0;
+function nextAggQueueId() {
+  return `${Date.now()}_${++aggQueueIdSeq}`;
+}
+function getAggQueue() {
+  try {
+    return JSON.parse(localStorage.getItem(AGG_QUEUE_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+function setAggQueueRaw(q) {
+  try {
+    localStorage.setItem(AGG_QUEUE_KEY, JSON.stringify(q));
+  } catch {
+  }
+}
+async function recordInvoiceAggregate(businessDay, branchName, kind, invoiceId, amount) {
+  const result = await attemptInvoiceAggregateWrite(businessDay, branchName, kind, invoiceId, amount);
+  if (result === "retry") {
+    const q = getAggQueue();
+    q.push({ qid: nextAggQueueId(), businessDay, branchName, kind, invoiceId, amount });
+    setAggQueueRaw(q);
+  }
+}
+let syncingAggQueue = false;
+async function syncAggregateQueue() {
+  if (syncingAggQueue) return;
+  const queue = getAggQueue();
+  if (!queue.length) return;
+  syncingAggQueue = true;
+  const finishedIds = /* @__PURE__ */ new Set();
+  for (const op of queue) {
+    const result = await attemptInvoiceAggregateWrite(op.businessDay, op.branchName, op.kind, op.invoiceId, op.amount);
+    if (result !== "retry") finishedIds.add(op.qid);
+  }
+  const current = getAggQueue();
+  setAggQueueRaw(current.filter((op) => !finishedIds.has(op.qid)));
+  syncingAggQueue = false;
 }
 async function fetchMonthlyAggregate(monthId) {
   try {
@@ -871,64 +964,7 @@ async function sumDailyAggregates(businessDays, branchFilter) {
   });
   return totals;
 }
-async function backfillInvoiceAggregates() {
-  const [sales, returns] = await Promise.all([salesStore.loadAll(), returnsStore.loadAll()]);
-  if (!sales || !returns) return { ok: false, error: "\u062A\u0639\u0630\u0631\u062A \u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0623\u0648 \u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A" };
-  const returnsBySale = {};
-  returns.forEach((r) => {
-    returnsBySale[r.originalSaleId] = (returnsBySale[r.originalSaleId] || 0) + (r.total || 0);
-  });
-  const byMonth = {};
-  let invoiceCount = 0;
-  sales.forEach((s) => {
-    if (s.fulfillment === "delivery" && !s.paid) return;
-    const day = businessDayOf(s.createdAt);
-    const monthId = day.slice(0, 7);
-    const branch = s.branchName || s.dispatchLocation || "\u0628\u062F\u0648\u0646 \u0641\u0631\u0639";
-    const kind = s.fulfillment === "delivery" ? "orders" : "sales";
-    const net = s.total - (returnsBySale[s.id] || 0);
-    byMonth[monthId] = byMonth[monthId] || {};
-    byMonth[monthId][day] = byMonth[monthId][day] || {};
-    byMonth[monthId][day][branch] = byMonth[monthId][day][branch] || {};
-    byMonth[monthId][day][branch][kind] = byMonth[monthId][day][branch][kind] || {};
-    byMonth[monthId][day][branch][kind][s.id] = net;
-    invoiceCount++;
-  });
-  const token = await ensureAuth();
-  const resourceRoot = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
-  const monthIds = Object.keys(byMonth);
-  for (const monthId of monthIds) {
-    const daysObj = byMonth[monthId];
-    const fieldPaths = [];
-    Object.entries(daysObj).forEach(([day, branches]) => {
-      Object.entries(branches).forEach(([branch, kinds]) => {
-        Object.entries(kinds).forEach(([kind, ids]) => {
-          Object.keys(ids).forEach((id) => {
-            fieldPaths.push(firestoreFieldPath(["days", day, branch, kind, id]));
-          });
-        });
-      });
-    });
-    const body = {
-      writes: [
-        {
-          update: {
-            name: `${resourceRoot}/monthly_aggregates_col/${monthId}`,
-            fields: toFirestoreFields({ days: daysObj })
-          },
-          updateMask: { fieldPaths }
-        }
-      ]
-    };
-    const res = await fetch(`${FIRESTORE_BASE}:commit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) return { ok: false, error: await res.text(), monthsDone: monthIds.indexOf(monthId) };
-  }
-  return { ok: true, invoiceCount, monthsCount: monthIds.length };
-}
+let syncingOfflineQueue = false;
 async function syncOfflineQueue() {
   if (syncingOfflineQueue) return;
   const queue = getOfflineQueue();
@@ -2560,7 +2596,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       setTimeout(() => setNotFoundToast(false), 2500);
     }
   };
-  const completeSale = () => {
+  const completeSale = async () => {
     if (checkoutBusyRef.current) return;
     const err = validatePaymentMethod(confirmForm, total);
     if (err) {
@@ -2588,10 +2624,18 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       transferAmount: isSplit ? parseNum(confirmForm.transferAmount) : null,
       createdAt: Date.now()
     };
+    const result = await salesStore._attempt("upsert", sale);
+    if (result === "drop") {
+      checkoutBusyRef.current = false;
+      setCheckoutBusy(false);
+      setConfirmError("\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u0641\u0627\u062A\u0648\u0631\u0629 \u2014 \u062C\u0631\u0628 \u062A\u0627\u0646\u064A. \u0644\u0648 \u0627\u0644\u0645\u0634\u0643\u0644\u0629 \u0627\u0633\u062A\u0645\u0631\u062A \u0645\u062A\u0633\u064A\u0628\u0634 \u0627\u0644\u0639\u0645\u064A\u0644 \u064A\u064A\u062C\u064A \u0642\u0628\u0644 \u0645\u0627 \u062A\u062A\u0623\u0643\u062F \u0625\u0646\u0647\u0627 \u0627\u062A\u0633\u062C\u0644\u062A.");
+      playBeep("error");
+      return;
+    }
+    if (result === "retry") queueOfflineOp("sales_col", "upsert", sale);
+    recordInvoiceAggregate(businessDayOf(sale.createdAt), sale.branchName, "sales", sale.id, sale.total);
     setSales((s) => [...s, sale]);
     playBeep("success");
-    salesStore.upsert(sale);
-    incrementInvoiceAggregate(businessDayOf(sale.createdAt), sale.branchName, "sales", sale.id, sale.total);
     setLastSale(sale);
     const closedId = activeId;
     const remaining = invoices.filter((inv) => inv.id !== closedId);
@@ -2606,7 +2650,7 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
     setDeliveryError("");
     setQuery("");
   };
-  const completeDeliveryOrder = () => {
+  const completeDeliveryOrder = async () => {
     if (checkoutBusyRef.current) return;
     if (!deliveryForm.area.trim()) {
       setDeliveryError("\u0627\u0643\u062A\u0628 \u0627\u0644\u0645\u0646\u0637\u0642\u0629 \u0623\u0648 \u0627\u0633\u0645 \u0627\u0644\u0645\u062D\u0644");
@@ -2639,9 +2683,17 @@ function CashierScreen({ user, products, productsLoading, sales, setSales, tierS
       preparedAt: Date.now(),
       createdAt: Date.now()
     };
+    const result = await salesStore._attempt("upsert", sale);
+    if (result === "drop") {
+      checkoutBusyRef.current = false;
+      setCheckoutBusy(false);
+      setDeliveryError("\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u0623\u0648\u0631\u062F\u0631 \u2014 \u062C\u0631\u0628 \u062A\u0627\u0646\u064A. \u0644\u0648 \u0627\u0644\u0645\u0634\u0643\u0644\u0629 \u0627\u0633\u062A\u0645\u0631\u062A \u0645\u062A\u0633\u064A\u0628\u0634 \u0627\u0644\u062F\u064A\u0644\u064A\u0641\u0631\u064A \u064A\u0645\u0634\u064A \u0642\u0628\u0644 \u0645\u0627 \u062A\u062A\u0623\u0643\u062F \u0625\u0646\u0647 \u0627\u062A\u0633\u062C\u0644.");
+      playBeep("error");
+      return;
+    }
+    if (result === "retry") queueOfflineOp("sales_col", "upsert", sale);
     setSales((s) => [...s, sale]);
     playBeep("success");
-    salesStore.upsert(sale);
     setLastSale(sale);
     const closedId = activeId;
     const remaining = invoices.filter((inv) => inv.id !== closedId);
@@ -3293,7 +3345,7 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
     if (err) return err;
     return null;
   };
-  const submitSend = (form) => {
+  const submitSend = async (form) => {
     const err = registerSend(form);
     if (err) return err;
     const now2 = Date.now();
@@ -3313,15 +3365,17 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
       receivedBy: form.paidUpfront ? user.name : null,
       receivedAt: form.paidUpfront ? now2 : null
     };
+    const result = await salesStore._attempt("upsert", updated);
+    if (result === "drop") return "\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u062A\u0633\u062C\u064A\u0644 \u2014 \u062C\u0631\u0628 \u062A\u0627\u0646\u064A. \u0644\u0648 \u0627\u0644\u0645\u0634\u0643\u0644\u0629 \u0627\u0633\u062A\u0645\u0631\u062A \u0645\u062A\u0633\u064A\u0628\u0634 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u064A\u0645\u0634\u064A \u0642\u0628\u0644 \u0645\u0627 \u062A\u062A\u0623\u0643\u062F.";
+    if (result === "retry") queueOfflineOp("sales_col", "upsert", updated);
     setSales(sales.map((s) => s.id === updated.id ? updated : s));
-    salesStore.upsert(updated);
     if (form.paidUpfront) {
-      incrementInvoiceAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "orders", updated.id, updated.total);
+      recordInvoiceAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "orders", updated.id, updated.total);
     }
     setSendingOrder(null);
     return null;
   };
-  const submitReceive = (form) => {
+  const submitReceive = async (form) => {
     const err = validatePaymentMethod(form, receivingOrder.total);
     if (err) return err;
     const now2 = Date.now();
@@ -3337,9 +3391,11 @@ function OrdersScreen({ user, sales, setSales, users, branchSettings, setView })
       receivedBy: user.name,
       receivedAt: now2
     };
+    const result = await salesStore._attempt("upsert", updated);
+    if (result === "drop") return "\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u0627\u0633\u062A\u0644\u0627\u0645 \u2014 \u062C\u0631\u0628 \u062A\u0627\u0646\u064A. \u0644\u0648 \u0627\u0644\u0645\u0634\u0643\u0644\u0629 \u0627\u0633\u062A\u0645\u0631\u062A \u0645\u062A\u0633\u064A\u0628\u0634 \u0627\u0644\u0641\u0644\u0648\u0633 \u062A\u062A\u0633\u0644\u0645 \u0642\u0628\u0644 \u0645\u0627 \u062A\u062A\u0623\u0643\u062F.";
+    if (result === "retry") queueOfflineOp("sales_col", "upsert", updated);
     setSales(sales.map((s) => s.id === updated.id ? updated : s));
-    salesStore.upsert(updated);
-    incrementInvoiceAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "orders", updated.id, updated.total);
+    recordInvoiceAggregate(businessDayOf(updated.createdAt), updated.dispatchLocation, "orders", updated.id, updated.total);
     if (updated.employeeName) {
       sendNotification(updated.employeeName, `\u0623\u0648\u0631\u062F\u0631 (\u0641\u0627\u062A\u0648\u0631\u0629 #${updated.invoiceNumber ?? "?"}) / (${updated.deliveryArea}) \u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645\u0647`);
     }
@@ -3383,7 +3439,7 @@ function SendOrderModal({ order, branchSettings, onSubmit, onClose }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const busyRef = React.useRef(false);
-  const submit = () => {
+  const submit = async () => {
     if (busyRef.current) return;
     if (!repName.trim()) {
       setError("\u0627\u0643\u062A\u0628 \u0627\u0633\u0645 \u0627\u0644\u0645\u0646\u062F\u0648\u0628");
@@ -3400,7 +3456,7 @@ function SendOrderModal({ order, branchSettings, onSubmit, onClose }) {
     const form = { repName, dispatchLocation, paidUpfront, ...pm };
     busyRef.current = true;
     setBusy(true);
-    const err = onSubmit(form);
+    const err = await onSubmit(form);
     if (err) {
       setError(err);
       busyRef.current = false;
@@ -3414,11 +3470,11 @@ function ReceiveOrderModal({ order, onSubmit, onClose }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const busyRef = React.useRef(false);
-  const submit = () => {
+  const submit = async () => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
-    const err = onSubmit(pm);
+    const err = await onSubmit(pm);
     if (err) {
       setError(err);
       busyRef.current = false;
@@ -3567,13 +3623,16 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
   const { start: rangeStart, end: rangeEnd } = rangeToTimestamps(range);
   const [aggTotals, setAggTotals] = useState(null);
   const [aggLoading, setAggLoading] = useState(true);
+  const [aggFailed, setAggFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setAggLoading(true);
+    setAggFailed(false);
     const days = businessDaysInRange(rangeStart, rangeEnd);
     sumDailyAggregates(days, filterBranch).then((totals) => {
       if (cancelled) return;
       setAggTotals(totals);
+      setAggFailed(totals === null);
       setAggLoading(false);
     });
     return () => {
@@ -3643,7 +3702,7 @@ function ReportsScreen({ user, sales, branchSettings, setView }) {
   };
   const aggGrossTotal = (filterType !== "orders" ? aggTotals?.salesTotal || 0 : 0) + (filterType !== "sales" ? aggTotals?.ordersTotal || 0 : 0);
   const aggReturnsTotal = (filterType !== "orders" ? aggTotals?.returnsSalesTotal || 0 : 0) + (filterType !== "sales" ? aggTotals?.returnsOrdersTotal || 0 : 0);
-  return /* @__PURE__ */ React.createElement("div", { className: "shop-root" }, /* @__PURE__ */ React.createElement(Header, { user, onLogout: () => setView("logout"), onBack: () => setView("menu"), title: "\u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", onNav: setView }), /* @__PURE__ */ React.createElement("div", { className: "max-w-lg mx-auto px-4 py-2 fade-up" }, loading ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#64748B] mb-3" }, "\u0628\u064A\u062D\u0645\u0651\u0644...") : offline ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-amber-400 mb-3" }, "\u0622\u062E\u0631 \u0646\u0633\u062E\u0629 \u0645\u062D\u0641\u0648\u0638\u0629 \u2014 \u0645\u0646 \u063A\u064A\u0631 \u0625\u0646\u062A\u0631\u0646\u062A") : null, /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 mb-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, filterType === "orders" ? "\u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639" : filterType === "sales" ? "\u0641\u0648\u0627\u062A\u064A\u0631 \u0627\u0644\u0643\u0627\u0634\u064A\u0631" : "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0639\u0645\u0644\u064A\u0627\u062A"), /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-emerald-400" }, combinedCount)), /* @__PURE__ */ React.createElement("div", { className: "text-left" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, "\u0635\u0627\u0641\u064A \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A", aggReturnsTotal > 0 ? " (\u0628\u0639\u062F \u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A)" : ""), aggLoading ? /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, "...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, aggGrossTotal), aggReturnsTotal > 0 && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-rose-400 tabular-nums" }, "\u0641\u064A\u0647\u0627 \u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0628\u0642\u064A\u0645\u0629 ", aggReturnsTotal, " \u062C")))), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "shop-root" }, /* @__PURE__ */ React.createElement(Header, { user, onLogout: () => setView("logout"), onBack: () => setView("menu"), title: "\u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631", onNav: setView }), /* @__PURE__ */ React.createElement("div", { className: "max-w-lg mx-auto px-4 py-2 fade-up" }, loading ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#64748B] mb-3" }, "\u0628\u064A\u062D\u0645\u0651\u0644...") : offline ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-amber-400 mb-3" }, "\u0622\u062E\u0631 \u0646\u0633\u062E\u0629 \u0645\u062D\u0641\u0648\u0638\u0629 \u2014 \u0645\u0646 \u063A\u064A\u0631 \u0625\u0646\u062A\u0631\u0646\u062A") : null, /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 mb-4 flex items-center justify-between" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, filterType === "orders" ? "\u0623\u0648\u0631\u062F\u0631\u0627\u062A \u0645\u0624\u0643\u062F\u0629 \u0627\u0644\u062F\u0641\u0639" : filterType === "sales" ? "\u0641\u0648\u0627\u062A\u064A\u0631 \u0627\u0644\u0643\u0627\u0634\u064A\u0631" : "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0639\u0645\u0644\u064A\u0627\u062A"), /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-emerald-400" }, combinedCount)), /* @__PURE__ */ React.createElement("div", { className: "text-left" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#94A3B8]" }, "\u0635\u0627\u0641\u064A \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A"), aggLoading ? /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, "...") : aggFailed ? /* @__PURE__ */ React.createElement("p", { className: "text-sm font-bold text-amber-400" }, "\u0645\u0634 \u0645\u062A\u0627\u062D \u062F\u0644\u0648\u0642\u062A\u064A \u2014 \u0627\u062A\u0623\u0643\u062F \u0645\u0646 \u0627\u0644\u0646\u062A") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { className: "text-2xl font-bold text-sky-400 tabular-nums" }, aggGrossTotal), aggReturnsTotal > 0 && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-rose-400 tabular-nums" }, "\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0627\u062A\u0633\u062C\u0644\u062A \u0641\u064A \u0646\u0641\u0633 \u0627\u0644\u0641\u062A\u0631\u0629: ", aggReturnsTotal, " \u062C")))), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => setFilterOpen(true),
@@ -4193,15 +4252,6 @@ function AdminScreen({ user, users, setUsers, setView }) {
   const [migrating, setMigrating] = useState(false);
   const [migrateProgress, setMigrateProgress] = useState("");
   const [migrateDone, setMigrateDone] = useState(false);
-  const [backfillRunning, setBackfillRunning] = useState(false);
-  const [backfillResult, setBackfillResult] = useState(null);
-  const runBackfill = async () => {
-    setBackfillRunning(true);
-    setBackfillResult(null);
-    const result = await backfillInvoiceAggregates();
-    setBackfillResult(result);
-    setBackfillRunning(false);
-  };
   const migrateUserIds = async () => {
     setMigrating(true);
     setMigrateDone(false);
@@ -4280,7 +4330,7 @@ function AdminScreen({ user, users, setUsers, setView }) {
         e.target.value = "";
       }
     }
-  )))), /* @__PURE__ */ React.createElement("section", null, /* @__PURE__ */ React.createElement("h2", { className: "font-bold text-sm text-amber-400 mb-3" }, "\u26A0\uFE0F \u0625\u0635\u0644\u0627\u062D \u0645\u0624\u0642\u062A \u2014 \u0623\u0631\u0642\u0627\u0645 \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A \u0627\u0644\u0642\u062F\u064A\u0645\u0629"), /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 space-y-2" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#CBD5E1]" }, '\u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0627\u0644\u0644\u064A \u0627\u062A\u0639\u0645\u0644\u062A \u0642\u0628\u0644 \u062A\u0641\u0639\u064A\u0644 \u0646\u0638\u0627\u0645 "\u0635\u0627\u0641\u064A \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A" \u0627\u0644\u062C\u062F\u064A\u062F \u0645\u0634 \u062F\u0627\u062E\u0644\u0629 \u0641\u064A \u062D\u0633\u0627\u0628\u0647 \u0644\u0633\u0647. \u0627\u0644\u0632\u0631\u0627\u0631 \u062F\u0647 \u0628\u064A\u0642\u0631\u0627 \u0643\u0644 \u0627\u0644\u0641\u0648\u0627\u062A\u064A\u0631 \u0648\u0627\u0644\u0645\u0631\u062A\u062C\u0639\u0627\u062A \u0627\u0644\u0642\u062F\u064A\u0645\u0629 \u0645\u0631\u0629 \u0648\u0627\u062D\u062F\u0629 \u0648\u064A\u0638\u0628\u0637\u0647\u0645. \u0622\u0645\u0646 \u062A\u062F\u0648\u0633\u0647 \u0623\u0643\u062A\u0631 \u0645\u0646 \u0645\u0631\u0629 \u0644\u0648 \u062D\u0635\u0644 \u062E\u0637\u0623 \u0641\u064A \u0627\u0644\u0646\u062A \u0641\u064A \u0627\u0644\u0646\u0635. \u0628\u0639\u062F \u0645\u0627 \u064A\u0634\u062A\u063A\u0644 \u0628\u0646\u062C\u0627\u062D\u060C \u0627\u062D\u0630\u0641 \u0627\u0644\u0642\u0633\u0645 \u062F\u0647 \u0645\u0646 \u0627\u0644\u062A\u0637\u0628\u064A\u0642.'), backfillResult?.ok ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-emerald-400 font-bold flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Icon, { name: "CheckCircle2", size: 14 }), " \u062A\u0645 \u2014 ", backfillResult.invoiceCount, " \u0641\u0627\u062A\u0648\u0631\u0629 \u0639\u0628\u0631 ", backfillResult.monthsCount, " \u0634\u0647\u0631") : /* @__PURE__ */ React.createElement("button", { onClick: runBackfill, disabled: backfillRunning, className: "btn-emerald w-full rounded-xl py-2.5 text-sm font-bold flex items-center justify-center gap-2" }, backfillRunning ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Icon, { name: "Loader2", size: 16, className: "animate-spin" }), " \u0628\u064A\u0634\u062A\u063A\u0644...") : "\u0625\u0635\u0644\u0627\u062D \u0623\u0631\u0642\u0627\u0645 \u0627\u0644\u0645\u0628\u064A\u0639\u0627\u062A \u0627\u0644\u0642\u062F\u064A\u0645\u0629 \u062F\u0644\u0648\u0642\u062A\u064A"), backfillResult && !backfillResult.ok && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-rose-400 mt-1" }, "\u062D\u0635\u0644\u062A \u0645\u0634\u0643\u0644\u0629: ", backfillResult.error))), legacyUsers.length > 0 && /* @__PURE__ */ React.createElement("section", null, /* @__PURE__ */ React.createElement("h2", { className: "font-bold text-sm text-sky-400 mb-3" }, "\u062A\u062D\u062F\u064A\u062B \u062D\u0633\u0627\u0628\u0627\u062A \u0627\u0644\u0645\u0648\u0638\u0641\u064A\u0646"), /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 space-y-2" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#CBD5E1]" }, "\u0641\u064A\u0647 ", legacyUsers.length, " \u062D\u0633\u0627\u0628 \u0645\u0648\u0638\u0641 \u0645\u062A\u062E\u0632\u0646 \u0628\u0637\u0631\u064A\u0642\u0629 \u0642\u062F\u064A\u0645\u0629\u060C \u0644\u0627\u0632\u0645 \u0646\u062D\u062F\u062B\u0647\u0627 \u0627\u0644\u0623\u0648\u0644 \u0642\u0628\u0644 \u0645\u0627 \u0646\u0642\u062F\u0631 \u0646\u0623\u0645\u0651\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0635\u062D. \u064A\u0641\u0636\u0651\u0644 \u062A\u0639\u0645\u0644 \u0646\u0633\u062E\u0629 \u0627\u062D\u062A\u064A\u0627\u0637\u064A\u0629 \u0641\u0648\u0642 \u0642\u0628\u0644 \u0645\u0627 \u062A\u0639\u0645\u0644 \u0627\u0644\u062A\u062D\u062F\u064A\u062B \u062F\u0647."), migrateDone ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-emerald-400 font-bold flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Icon, { name: "CheckCircle2", size: 14 }), " \u062A\u0645 \u0627\u0644\u062A\u062D\u062F\u064A\u062B") : /* @__PURE__ */ React.createElement("button", { onClick: migrateUserIds, disabled: migrating, className: "btn-emerald w-full rounded-xl py-2.5 text-sm font-bold flex items-center justify-center gap-2" }, migrating ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Icon, { name: "Loader2", size: 16, className: "animate-spin" }), " \u0628\u064A\u062D\u062F\u062B... ", migrateProgress) : "\u062A\u062D\u062F\u064A\u062B \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A \u062F\u0644\u0648\u0642\u062A\u064A")))));
+  )))), legacyUsers.length > 0 && /* @__PURE__ */ React.createElement("section", null, /* @__PURE__ */ React.createElement("h2", { className: "font-bold text-sm text-sky-400 mb-3" }, "\u062A\u062D\u062F\u064A\u062B \u062D\u0633\u0627\u0628\u0627\u062A \u0627\u0644\u0645\u0648\u0638\u0641\u064A\u0646"), /* @__PURE__ */ React.createElement("div", { className: "panel rounded-2xl p-4 space-y-2" }, /* @__PURE__ */ React.createElement("p", { className: "text-xs text-[#CBD5E1]" }, "\u0641\u064A\u0647 ", legacyUsers.length, " \u062D\u0633\u0627\u0628 \u0645\u0648\u0638\u0641 \u0645\u062A\u062E\u0632\u0646 \u0628\u0637\u0631\u064A\u0642\u0629 \u0642\u062F\u064A\u0645\u0629\u060C \u0644\u0627\u0632\u0645 \u0646\u062D\u062F\u062B\u0647\u0627 \u0627\u0644\u0623\u0648\u0644 \u0642\u0628\u0644 \u0645\u0627 \u0646\u0642\u062F\u0631 \u0646\u0623\u0645\u0651\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0635\u062D. \u064A\u0641\u0636\u0651\u0644 \u062A\u0639\u0645\u0644 \u0646\u0633\u062E\u0629 \u0627\u062D\u062A\u064A\u0627\u0637\u064A\u0629 \u0641\u0648\u0642 \u0642\u0628\u0644 \u0645\u0627 \u062A\u0639\u0645\u0644 \u0627\u0644\u062A\u062D\u062F\u064A\u062B \u062F\u0647."), migrateDone ? /* @__PURE__ */ React.createElement("p", { className: "text-xs text-emerald-400 font-bold flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Icon, { name: "CheckCircle2", size: 14 }), " \u062A\u0645 \u0627\u0644\u062A\u062D\u062F\u064A\u062B") : /* @__PURE__ */ React.createElement("button", { onClick: migrateUserIds, disabled: migrating, className: "btn-emerald w-full rounded-xl py-2.5 text-sm font-bold flex items-center justify-center gap-2" }, migrating ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Icon, { name: "Loader2", size: 16, className: "animate-spin" }), " \u0628\u064A\u062D\u062F\u062B... ", migrateProgress) : "\u062A\u062D\u062F\u064A\u062B \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A \u062F\u0644\u0648\u0642\u062A\u064A")))));
 }
 function App() {
   const [booting, setBooting] = useState(true);
@@ -4421,10 +4471,16 @@ function App() {
     updateCount();
     if (!currentUser) return;
     const onQueueChange = (e) => setPendingSyncCount(e.detail);
-    const onOnline = () => syncOfflineQueue();
+    const onOnline = () => {
+      syncOfflineQueue();
+      syncAggregateQueue();
+    };
     window.addEventListener("offline-queue-change", onQueueChange);
     window.addEventListener("online", onOnline);
-    const interval = setInterval(syncOfflineQueue, 3e4);
+    const interval = setInterval(() => {
+      syncOfflineQueue();
+      syncAggregateQueue();
+    }, 3e4);
     return () => {
       window.removeEventListener("offline-queue-change", onQueueChange);
       window.removeEventListener("online", onOnline);
